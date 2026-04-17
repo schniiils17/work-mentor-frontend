@@ -1,0 +1,36 @@
+:root {
+  /* Figma-Design: helle Palette, Blau/Grün/Lila */
+  --color-blue: #2563eb;
+  --color-blue-light: #dbeafe;
+  --color-green: #059669;
+  --color-green-light: #d1fae5;
+  --color-lavender: #818cf8;
+  --color-lavender-hover: #6366f1;
+  --color-text: #1f2937;
+  --color-text-muted: #6b7280;
+  --color-bg: #ffffff;
+  --color-card: #f9fafb;
+  --color-border: #e5e7eb;
+  --radius-pill: 9999px;
+  --radius-card: 1rem;
+  --radius-input: 0.75rem;
+  --shadow-card: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
