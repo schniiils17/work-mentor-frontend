@@ -46,10 +46,12 @@ type Dashboard = {
     naechster_schritt?: string
 }
 
+type Progress = { current: number; estimated_total: number; phase: string }
+
 type AgentResponse =
     | { typ: "agent_message"; messages: AgentMessage[]; action?: { typ: string; buttons: ButtonAction[] } }
-    | { typ: "frage"; frage_nr: number; perspektive: string; skill: string; frage: string; optionen: Option[]; _meta: Meta }
-    | { typ: "praeferenz"; frage_nr: number; perspektive: string; dimension: string; frage: string; optionen: Option[]; _meta: Meta }
+    | { typ: "frage"; frage_nr: number; perspektive: string; skill: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
+    | { typ: "praeferenz"; frage_nr: number; perspektive: string; dimension: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
     | { typ: "magie_moment"; messages: AgentMessage[]; next: AgentResponse }
     | { typ: "abschluss"; messages: AgentMessage[]; dashboard: Dashboard }
     | { typ: "error"; code: string; message: string }
@@ -101,6 +103,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const [frageNr, setFrageNr] = React.useState(0)
     const [answered, setAnswered] = React.useState(false)
     const [startTime, setStartTime] = React.useState(0)
+    const [progress, setProgress] = React.useState<Progress | null>(null)
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const processingRef = React.useRef(false)
 
@@ -153,6 +156,9 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     setFrageNr(response.frage_nr)
                     setAnswered(false)
                     setStartTime(Date.now())
+                    if ('progress' in response && response.progress) {
+                        setProgress(response.progress as Progress)
+                    }
                     setBubbles(prev => [...prev, { kind: "frage", data: response, id: nextId() }])
                     break
                 }
@@ -406,10 +412,28 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 >
                     🤖
                 </div>
-                <div>
+                <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937" }}>Work Mentor</div>
                     <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
                 </div>
+                {progress && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 80, height: 4, borderRadius: 2, background: "#e5e7eb", overflow: "hidden" }}>
+                            <div
+                                style={{
+                                    width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
+                                    height: "100%",
+                                    borderRadius: 2,
+                                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
+                                    transition: "width 0.3s ease",
+                                }}
+                            />
+                        </div>
+                        <div style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                            {progress.current}/{progress.estimated_total}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Chat Area */}
