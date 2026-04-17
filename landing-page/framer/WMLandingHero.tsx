@@ -616,13 +616,18 @@ export default function WMLandingHero({ maxWidth = 720 }: Props) {
                 setAnalysisProgress(100)
 
                 if (typeof window !== "undefined") {
+                    // Store data for Agent v2 chat component
+                    sessionStorage.setItem("currentTitle", currentTitle)
+                    sessionStorage.setItem("industry", industry)
+
                     window.dispatchEvent(
                         new CustomEvent("wm-analysis-started", {
                             detail: { role, experienceLevel, companySize, sid },
                         })
                     )
-                    const questionsUrl = `/questions?sid=${encodeURIComponent(sid)}`
-                    window.location.assign(questionsUrl)
+                    // Navigate to Agent v2 assessment chat
+                    const assessmentUrl = `/assessment?sid=${encodeURIComponent(sid)}`
+                    window.location.assign(assessmentUrl)
                 }
             }, 250)
         } catch (error) {
