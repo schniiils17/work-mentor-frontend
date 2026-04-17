@@ -416,24 +416,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937" }}>Work Mentor</div>
                     <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
                 </div>
-                {progress && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ width: 80, height: 4, borderRadius: 2, background: "#e5e7eb", overflow: "hidden" }}>
-                            <div
-                                style={{
-                                    width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
-                                    height: "100%",
-                                    borderRadius: 2,
-                                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
-                                    transition: "width 0.3s ease",
-                                }}
-                            />
-                        </div>
-                        <div style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                            {progress.current}/{progress.estimated_total}
-                        </div>
-                    </div>
-                )}
             </div>
 
             {/* Chat Area */}
@@ -500,6 +482,32 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                         case "frage":
                             return (
                                 <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
+                                    {/* Floating progress pill */}
+                                    {progress && (
+                                        <div style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 8,
+                                            marginBottom: 10,
+                                            padding: "6px 14px",
+                                            background: "#f1f5f9",
+                                            borderRadius: 20,
+                                            width: "fit-content",
+                                        }}>
+                                            <div style={{ width: 60, height: 4, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
+                                                <div style={{
+                                                    width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
+                                                    height: "100%",
+                                                    borderRadius: 2,
+                                                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
+                                                    transition: "width 0.3s ease",
+                                                }} />
+                                            </div>
+                                            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                                                {progress.current} von ~{progress.estimated_total}
+                                            </span>
+                                        </div>
+                                    )}
                                     {/* Question text as agent bubble */}
                                     <div style={{ ...agentBubbleStyle, marginBottom: 10, maxWidth: "100%" }}>
                                         {bubble.data.frage}
