@@ -50,6 +50,8 @@ type Progress = { current: number; estimated_total: number; phase: string }
 
 type AgentResponse =
     | { typ: "agent_message"; messages: AgentMessage[]; action?: { typ: string; buttons: ButtonAction[] } }
+    | { typ: "statement"; statement_nr: number; text: string; optionen: Option[]; progress?: Progress; _meta: Meta }
+    | { typ: "forced_choice"; statement_nr: number; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
     | { typ: "frage"; frage_nr: number; perspektive: string; skill: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
     | { typ: "praeferenz"; frage_nr: number; perspektive: string; dimension: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
     | { typ: "magie_moment"; messages: AgentMessage[]; next: AgentResponse }
@@ -83,6 +85,8 @@ type VarianzAntwort = { frage: string; antwort: string; skill_anpassung: string 
 type ChatBubble =
     | { kind: "agent"; text: string; id: string }
     | { kind: "user"; text: string; id: string }
+    | { kind: "statement"; data: AgentResponse & { typ: "statement" }; id: string }
+    | { kind: "forced_choice"; data: AgentResponse & { typ: "forced_choice" }; id: string }
     | { kind: "frage"; data: AgentResponse & { typ: "frage" | "praeferenz" }; id: string }
     | { kind: "buttons"; buttons: ButtonAction[]; id: string }
     | { kind: "typing"; id: string }
@@ -406,6 +410,22 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     break
                 }
 
+                case "statement": {
+                    setAnswered(false)
+                    setStartTime(Date.now())
+                    if (response.progress) setProgress(response.progress as Progress)
+                    setBubbles(prev => [...prev, { kind: "statement", data: response as any, id: nextId() }])
+                    break
+                }
+
+                case "forced_choice": {
+                    setAnswered(false)
+                    setStartTime(Date.now())
+                    if (response.progress) setProgress(response.progress as Progress)
+                    setBubbles(prev => [...prev, { kind: "forced_choice", data: response as any, id: nextId() }])
+                    break
+                }
+
                 case "frage":
                 case "praeferenz": {
                     setFrageNr(response.frage_nr)
@@ -498,6 +518,29 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             await processResponse(response)
         } catch (err: any) {
             setBubbles(prev => prev.filter(b => b.id !== typingId))
+            setError(`Fehler: ${err.message}`)
+        }
+    }
+
+    async function handleStatementClick(optionId: string, optionText: string, statementNr: number) {
+        if (answered) return
+        setAnswered(true)
+        const reactionTime = Date.now() - startTime
+
+        setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
+
+        // Kurze Pause — kein Typing bei Statements (fühlt sich schneller an)
+        await sleep(400)
+
+        try {
+            const response = await callAgent("/api/assessment/answer", {
+                session_id: sessionId,
+                frage_nr: statementNr,
+                antwort: optionId,
+                reaction_time_ms: reactionTime,
+            })
+            await processResponse(response)
+        } catch (err: any) {
             setError(`Fehler: ${err.message}`)
         }
     }
@@ -777,6 +820,30 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                                 </div>
                             )
 
+                        case "statement":
+                            return (
+                                <StatementCard
+                                    key={bubble.id}
+                                    text={bubble.data.text}
+                                    optionen={bubble.data.optionen}
+                                    statementNr={(bubble.data as any).statement_nr}
+                                    isMobile={isMobile}
+                                    onAnswer={handleStatementClick}
+                                />
+                            )
+
+                        case "forced_choice":
+                            return (
+                                <ForcedChoiceCard
+                                    key={bubble.id}
+                                    frage={(bubble.data as any).frage}
+                                    optionen={bubble.data.optionen}
+                                    statementNr={(bubble.data as any).statement_nr}
+                                    isMobile={isMobile}
+                                    onAnswer={handleStatementClick}
+                                />
+                            )
+
                         case "varianz":
                             return (
                                 <VarianzCard
@@ -869,6 +936,171 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     40% { transform: scale(1); opacity: 1; }
                 }
             `}</style>
+        </div>
+    )
+}
+
+// ─── Statement Card (Agree/Disagree) ─────────────────────────
+
+function StatementCard({
+    text,
+    optionen,
+    statementNr,
+    isMobile,
+    onAnswer
+}: {
+    text: string
+    optionen: Option[]
+    statementNr: number
+    isMobile: boolean
+    onAnswer: (optionId: string, optionText: string, nr: number) => void
+}) {
+    const [answered, setAnswered] = React.useState(false)
+
+    return (
+        <div style={{
+            alignSelf: "flex-start",
+            width: "100%",
+            maxWidth: "95%",
+        }}>
+            {/* Statement als Agent-Bubble */}
+            <div style={{
+                maxWidth: "85%",
+                padding: isMobile ? "14px 16px" : "16px 20px",
+                background: "#fff",
+                borderRadius: "18px 18px 18px 4px",
+                border: "1px solid #e5e7eb",
+                fontSize: isMobile ? 15 : 16,
+                lineHeight: 1.5,
+                color: "#1f2937",
+                fontStyle: "italic",
+                marginBottom: 12,
+            }}>
+                „{text}“
+            </div>
+
+            {/* Stimmt / Stimmt nicht Buttons */}
+            <div style={{ display: "flex", gap: 10 }}>
+                {optionen.map(opt => (
+                    <button
+                        key={opt.id}
+                        onClick={() => {
+                            if (answered) return
+                            setAnswered(true)
+                            onAnswer(opt.id, opt.text, statementNr)
+                        }}
+                        disabled={answered}
+                        style={{
+                            flex: 1,
+                            padding: isMobile ? "12px 16px" : "14px 20px",
+                            borderRadius: 14,
+                            border: "2px solid #e5e7eb",
+                            background: "#fff",
+                            color: "#374151",
+                            fontSize: isMobile ? 15 : 16,
+                            fontWeight: 600,
+                            cursor: answered ? "default" : "pointer",
+                            opacity: answered ? 0.5 : 1,
+                            transition: "all 0.2s ease",
+                        }}
+                        onMouseEnter={e => {
+                            if (!answered) {
+                                ;(e.target as HTMLButtonElement).style.borderColor = opt.id === "A" ? "#10b981" : "#ef4444"
+                                ;(e.target as HTMLButtonElement).style.background = opt.id === "A" ? "#f0fdf4" : "#fef2f2"
+                            }
+                        }}
+                        onMouseLeave={e => {
+                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
+                            ;(e.target as HTMLButtonElement).style.background = "#fff"
+                        }}
+                    >
+                        {opt.id === "A" ? "✓ " : "✗ "}{opt.text}
+                    </button>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+// ─── Forced Choice Card ──────────────────────────────────
+
+function ForcedChoiceCard({
+    frage,
+    optionen,
+    statementNr,
+    isMobile,
+    onAnswer
+}: {
+    frage: string
+    optionen: Option[]
+    statementNr: number
+    isMobile: boolean
+    onAnswer: (optionId: string, optionText: string, nr: number) => void
+}) {
+    const [answered, setAnswered] = React.useState(false)
+
+    return (
+        <div style={{
+            alignSelf: "flex-start",
+            width: "100%",
+            maxWidth: "95%",
+        }}>
+            {/* Frage als Agent-Bubble */}
+            <div style={{
+                maxWidth: "85%",
+                padding: isMobile ? "12px 14px" : "14px 18px",
+                background: "#fff",
+                borderRadius: "18px 18px 18px 4px",
+                border: "1px solid #e5e7eb",
+                fontSize: isMobile ? 14 : 15,
+                lineHeight: 1.5,
+                color: "#1f2937",
+                marginBottom: 12,
+            }}>
+                {frage}
+            </div>
+
+            {/* Zwei Optionen als große Karten */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {optionen.map(opt => (
+                    <button
+                        key={opt.id}
+                        onClick={() => {
+                            if (answered) return
+                            setAnswered(true)
+                            onAnswer(opt.id, opt.text, statementNr)
+                        }}
+                        disabled={answered}
+                        style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: isMobile ? "16px 18px" : "18px 22px",
+                            borderRadius: 14,
+                            border: "2px solid #e5e7eb",
+                            background: "#fff",
+                            color: "#374151",
+                            fontSize: isMobile ? 15 : 16,
+                            lineHeight: 1.5,
+                            cursor: answered ? "default" : "pointer",
+                            opacity: answered ? 0.5 : 1,
+                            transition: "all 0.2s ease",
+                            boxSizing: "border-box" as const,
+                        }}
+                        onMouseEnter={e => {
+                            if (!answered) {
+                                ;(e.target as HTMLButtonElement).style.borderColor = "#2563eb"
+                                ;(e.target as HTMLButtonElement).style.background = "#f0f7ff"
+                            }
+                        }}
+                        onMouseLeave={e => {
+                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
+                            ;(e.target as HTMLButtonElement).style.background = "#fff"
+                        }}
+                    >
+                        {opt.text}
+                    </button>
+                ))}
+            </div>
         </div>
     )
 }
