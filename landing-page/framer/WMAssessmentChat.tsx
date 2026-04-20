@@ -882,26 +882,30 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
                         case "statement":
                             return (
-                                <StatementCard
-                                    key={bubble.id}
-                                    text={bubble.data.text}
-                                    optionen={bubble.data.optionen}
-                                    statementNr={(bubble.data as any).statement_nr}
-                                    isMobile={isMobile}
-                                    onAnswer={handleStatementClick}
-                                />
+                                <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
+                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
+                                    <StatementCard
+                                        text={bubble.data.text}
+                                        optionen={bubble.data.optionen}
+                                        statementNr={(bubble.data as any).statement_nr}
+                                        isMobile={isMobile}
+                                        onAnswer={handleStatementClick}
+                                    />
+                                </div>
                             )
 
                         case "forced_choice":
                             return (
-                                <ForcedChoiceCard
-                                    key={bubble.id}
-                                    frage={(bubble.data as any).frage}
-                                    optionen={bubble.data.optionen}
-                                    statementNr={(bubble.data as any).statement_nr}
-                                    isMobile={isMobile}
-                                    onAnswer={handleStatementClick}
-                                />
+                                <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
+                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
+                                    <ForcedChoiceCard
+                                        frage={(bubble.data as any).frage}
+                                        optionen={bubble.data.optionen}
+                                        statementNr={(bubble.data as any).statement_nr}
+                                        isMobile={isMobile}
+                                        onAnswer={handleStatementClick}
+                                    />
+                                </div>
                             )
 
                         case "varianz":
@@ -917,6 +921,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                         case "frage":
                             return (
                                 <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
+                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
                                     {/* Question text as agent bubble */}
                                     <div style={{ ...agentBubbleStyle, marginBottom: 10, maxWidth: "100%" }}>
                                         {bubble.data.frage}
@@ -996,6 +1001,38 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     40% { transform: scale(1); opacity: 1; }
                 }
             `}</style>
+        </div>
+    )
+}
+
+// ─── Progress Pill ───────────────────────────────────────
+
+function ProgressPill({ progress }: { progress: Progress }) {
+    const pct = Math.round((progress.current / progress.estimated_total) * 100)
+    const label = progress.phase === "statements" ? "Persönlichkeit" : progress.phase === "szenarien" ? "Verhalten" : ""
+    return (
+        <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 10,
+            padding: "6px 14px",
+            background: "#f1f5f9",
+            borderRadius: 20,
+            width: "fit-content",
+        }}>
+            <div style={{ width: 60, height: 4, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
+                <div style={{
+                    width: `${pct}%`,
+                    height: "100%",
+                    borderRadius: 2,
+                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
+                    transition: "width 0.3s ease",
+                }} />
+            </div>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                {progress.current} von ~{progress.estimated_total}{label ? ` · ${label}` : ""}
+            </span>
         </div>
     )
 }
