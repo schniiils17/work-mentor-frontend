@@ -18,6 +18,8 @@ sessionStorage.setItem("wm_session_id", "test-" + Date.now());
 sessionStorage.setItem("targetPosition", "Vertriebsleiter");
 sessionStorage.setItem("currentTitle", "Vertriebstrainer");
 sessionStorage.setItem("industry", "Versicherung");
+// Keep-Alive: Railway wach halten während der User auf der Seite ist
+setInterval(()=>fetch("https://web-production-ad0c4.up.railway.app/api/health").catch(()=>{}), 4*60*1000);
 </script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -150,11 +152,16 @@ function App() {
   }
 
   async function transitionToAssessment() {
-    const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(1200);
-    setBubbles(p=>{const f=p.filter(b=>b.id!==t);return[...f,{kind:"agent",text:"Alles klar. Jetzt schauen wir mal wie gut du dazu passt.",id:nextId()}]});
+    const t1=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t1}]); await sleep(1500);
+    setBubbles(p=>{const f=p.filter(b=>b.id!==t1);return[...f,{kind:"agent",text:"Alles klar. Ich weiß jetzt genug über die Position.",id:nextId()}]});
     await sleep(800);
+    const t2=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t2}]); await sleep(1200);
+    setBubbles(p=>{const f=p.filter(b=>b.id!==t2);return[...f,{kind:"agent",text:"Jetzt zeig ich dir ein paar Situationen — sag mir einfach was du machst.",id:nextId()}]});
+    await sleep(600);
     setPhase("assessment"); phaseRef.current = "assessment";
-    startAssessment(researchResult?.skills || [], varianzAntwortenRef.current);
+    const t3=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t3}]);
+    await startAssessment(researchResult?.skills || [], varianzAntwortenRef.current);
+    setBubbles(p=>p.filter(b=>b.id!==t3));
   }
 
   async function startAssessment(skills, vAntworten) {

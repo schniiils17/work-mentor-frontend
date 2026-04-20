@@ -170,6 +170,14 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }, [bubbles])
 
+    // Keep-Alive: Railway wach halten während der User auf der Seite ist
+    React.useEffect(() => {
+        const interval = setInterval(() => {
+            fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {})
+        }, 4 * 60 * 1000)
+        return () => clearInterval(interval)
+    }, [])
+
     // ─── Agent API calls ───────────────────────────────────────
 
     async function callAgent(endpoint: string, body: Record<string, unknown>, retries = 2): Promise<any> {
@@ -375,23 +383,41 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const varianzAntwortenRef = React.useRef<VarianzAntwort[]>([])
 
     async function transitionToAssessment() {
-        // Übergang zum Assessment
-        const typingId = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-        await sleep(1200)
+        // Typing-Animation: User merkt "hier passiert was"
+        const typingId1 = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId1 }])
+        await sleep(1500)
         setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== typingId)
+            const filtered = prev.filter(b => b.id !== typingId1)
             return [...filtered, {
                 kind: "agent",
-                text: "Alles klar. Ich weiß jetzt genug über die Position. Jetzt schauen wir mal wie gut du dazu passt.",
+                text: "Alles klar. Ich weiß jetzt genug über die Position.",
                 id: nextId()
             }]
         })
 
         await sleep(800)
+        const typingId2 = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId2 }])
+        await sleep(1200)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== typingId2)
+            return [...filtered, {
+                kind: "agent",
+                text: "Jetzt zeig ich dir ein paar Situationen — sag mir einfach was du machst.",
+                id: nextId()
+            }]
+        })
+
+        await sleep(600)
         setPhase("assessment")
+        // Typing während der Agent geladen wird
+        const typingId3 = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId3 }])
         // Verwende Ref statt State (synchron, immer aktuell)
-        startAssessment(researchResult?.skills || [], varianzAntwortenRef.current)
+        await startAssessment(researchResult?.skills || [], varianzAntwortenRef.current)
+        // Typing wird durch processResponse entfernt
+        setBubbles(prev => prev.filter(b => b.id !== typingId3))
     }
 
     // ─── Phase 3: Assessment ──────────────────────────────────
