@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Work Mentor — Assessment Test</title>
+<title>Work Mentor - Assessment Test</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body, #root { height: 100%; }
@@ -124,7 +124,7 @@ function App() {
     const t2 = nextId();
     setBubbles(p=>[...p,{kind:"typing",id:t2}]);
     await sleep(1500);
-    setBubbles(p=>{const f=p.filter(b=>b.id!==t2);return[...f,{kind:"agent",text:"Aber bevor wir starten — ich muss ein paar Sachen wissen.",id:nextId()}]});
+    setBubbles(p=>{const f=p.filter(b=>b.id!==t2);return[...f,{kind:"agent",text:"Aber bevor wir starten - ich muss ein paar Sachen wissen.",id:nextId()}]});
     await sleep(600);
     showVarianzFrage(0, result.varianz_fragen);
   }
@@ -309,7 +309,8 @@ function App() {
             case "buttons": return <div key={b.id} style={{display:"flex",gap:8,alignSelf:"flex-start"}}>{b.buttons.map(btn=><button key={btn.id} onClick={()=>handleButtonClick(btn.id)} style={{padding:"10px 24px",borderRadius:24,border:"none",background:"linear-gradient(135deg,#2563eb,#1d4ed8)",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer"}}>{btn.text}</button>)}</div>;
             case "statement": return (
               <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
-                <div style={{...agentBub,fontStyle:"italic",marginBottom:12,fontSize:16,maxWidth:"100%"}}>„{b.data.text}"</div>
+                {b.data.progress && <ProgressPill progress={b.data.progress}/>}
+                <div style={{...agentBub,fontStyle:"italic",marginBottom:12,fontSize:16,maxWidth:"100%"}}>„{b.data.text}“</div>
                 <div style={{display:"flex",gap:10}}>
                   {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleStatementClick(o.id,o.text,b.data.statement_nr)} style={{flex:1,padding:"14px 20px",borderRadius:14,border:"2px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:16,fontWeight:600,cursor:"pointer",transition:"all 0.2s ease"}} onMouseEnter={e=>{e.target.style.borderColor=o.id==="A"?"#10b981":"#ef4444";e.target.style.background=o.id==="A"?"#f0fdf4":"#fef2f2"}} onMouseLeave={e=>{e.target.style.borderColor="#e5e7eb";e.target.style.background="#fff"}}>{o.id==="A"?"✓ ":"✗ "}{o.text}</button>)}
                 </div>
@@ -317,6 +318,7 @@ function App() {
             );
             case "forced_choice": return (
               <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                {b.data.progress && <ProgressPill progress={b.data.progress}/>}
                 <div style={{...agentBub,marginBottom:12,maxWidth:"100%"}}>{b.data.frage}</div>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleStatementClick(o.id,o.text,b.data.statement_nr)} style={{width:"100%",textAlign:"left",padding:"18px 22px",borderRadius:14,border:"2px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:16,lineHeight:1.5,cursor:"pointer",transition:"all 0.2s ease"}} onMouseEnter={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#f0f7ff"}} onMouseLeave={e=>{e.target.style.borderColor="#e5e7eb";e.target.style.background="#fff"}}>{o.text}</button>)}
@@ -333,6 +335,7 @@ function App() {
             );
             case "frage": return (
               <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                {b.data.progress && <ProgressPill progress={b.data.progress}/>}
                 <div style={{...agentBub,marginBottom:10,maxWidth:"100%"}}>{b.data.frage}</div>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleOptionClick(o.id,o.text)} style={{width:"100%",textAlign:"left",padding:"14px 18px",borderRadius:12,border:"1px solid #e5e7eb",borderLeft:"4px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:15,lineHeight:1.45,cursor:"pointer",transition:"all 0.15s ease"}} onMouseEnter={e=>{e.target.style.borderLeftColor="#2563eb";e.target.style.background="#f0f7ff"}} onMouseLeave={e=>{e.target.style.borderLeftColor="#e5e7eb";e.target.style.background="#fff"}}><span style={{display:"inline-block",width:22,height:22,lineHeight:"22px",textAlign:"center",borderRadius:6,background:"#f1f5f9",color:"#64748b",fontSize:12,fontWeight:600,marginRight:10,verticalAlign:"middle"}}>{o.id}</span>{o.text}</button>)}
@@ -367,6 +370,20 @@ function App() {
         })}
       </div>
       <style>{`@keyframes dot{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+function ProgressPill({progress}) {
+  if (!progress) return null;
+  const pct = Math.round((progress.current / progress.estimated_total) * 100);
+  const label = progress.phase === "statements" ? "Persönlichkeit" : progress.phase === "szenarien" ? "Verhalten" : "";
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 14px",background:"#f1f5f9",borderRadius:20,width:"fit-content"}}>
+      <div style={{width:60,height:4,borderRadius:2,background:"#e2e8f0",overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",borderRadius:2,background:"linear-gradient(90deg,#06b6d4,#2563eb)",transition:"width 0.3s ease"}}/>
+      </div>
+      <span style={{fontSize:11,color:"#64748b",fontWeight:500}}>{progress.current} von ~{progress.estimated_total}{label ? ` · ${label}` : ""}</span>
     </div>
   );
 }
