@@ -172,14 +172,35 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
     // ─── Agent API calls ───────────────────────────────────────
 
-    async function callAgent(endpoint: string, body: Record<string, unknown>): Promise<any> {
-        const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-        })
-        if (!res.ok) throw new Error(`Agent error: ${res.status}`)
-        return res.json()
+    async function callAgent(endpoint: string, body: Record<string, unknown>, retries = 2): Promise<any> {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const controller = new AbortController()
+                const timeoutId = setTimeout(() => controller.abort(), 30000)
+
+                const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                    signal: controller.signal,
+                })
+                clearTimeout(timeoutId)
+
+                if (!res.ok) {
+                    if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue }
+                    throw new Error(`Agent error: ${res.status}`)
+                }
+                return res.json()
+            } catch (err: any) {
+                if (err.name === "AbortError" || err.message?.includes("fetch")) {
+                    if (attempt < retries) { await sleep(1500 * (attempt + 1)); continue }
+                    throw new Error("Verbindung zum Agent hat zu lange gedauert. Bitte lade die Seite neu.")
+                }
+                if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue }
+                throw err
+            }
+        }
+        throw new Error("Agent nicht erreichbar.")
     }
 
     // ─── Phase 1: Skill Research ──────────────────────────────
@@ -486,14 +507,19 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         setBubbles(prev => prev.filter(b => b.kind !== "buttons"))
         setBubbles(prev => [...prev, { kind: "user", text: "Los geht's", id: nextId() }])
 
+        const typingId = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
+
         try {
             const response = await callAgent("/api/assessment/answer", {
                 session_id: sessionId,
                 antwort: buttonId,
             })
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
             await processResponse(response)
         } catch (err: any) {
-            setError(`Fehler: ${err.message}`)
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
+            setError(`Verbindung fehlgeschlagen. Bitte lade die Seite neu.`)
         }
     }
 
@@ -518,7 +544,12 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             await processResponse(response)
         } catch (err: any) {
             setBubbles(prev => prev.filter(b => b.id !== typingId))
-            setError(`Fehler: ${err.message}`)
+            setBubbles(prev => [...prev, {
+                kind: "agent" as const,
+                text: `⚠️ Verbindungsproblem. Bitte versuche es nochmal.`,
+                id: nextId()
+            }])
+            setAnswered(false)
         }
     }
 
@@ -529,8 +560,8 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
         setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
 
-        // Kurze Pause — kein Typing bei Statements (fühlt sich schneller an)
-        await sleep(400)
+        const typingId = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
         try {
             const response = await callAgent("/api/assessment/answer", {
@@ -539,9 +570,17 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 antwort: optionId,
                 reaction_time_ms: reactionTime,
             })
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
             await processResponse(response)
         } catch (err: any) {
-            setError(`Fehler: ${err.message}`)
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
+            // Retry-Button statt harter Fehler
+            setBubbles(prev => [...prev, {
+                kind: "agent" as const,
+                text: `⚠️ Verbindungsproblem. Bitte versuche es nochmal.`,
+                id: nextId()
+            }])
+            setAnswered(false)
         }
     }
 
@@ -735,7 +774,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
                 </div>
                 {/* Progress in header during assessment */}
-                {progress && phase === "assessment" && (
+                {progress && (phase === "assessment" || phase === "varianz") && (
                     <div style={{
                         display: "flex",
                         alignItems: "center",
