@@ -130,10 +130,12 @@ function sleep(ms: number): Promise<void> {
 // ─── Loading Messages ─────────────────────────────────────────
 
 const LOADING_MESSAGES = [
+    "Verbinde mit dem Arbeitsmarkt...",
     "Durchsuche Stellenanzeigen...",
     "Analysiere Anforderungsprofile...",
     "Vergleiche Skill-Muster...",
     "Erkenne Varianz zwischen Positionen...",
+    "Das kann einen Moment dauern...",
     "Bereite dein Assessment vor...",
 ]
 
@@ -233,6 +235,8 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             return
         }
 
+        // Pre-warm: Server aufwecken bevor der schwere Call kommt
+        fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {})
         // Start Skill Research
         startResearch(zieljob, branche, aktuellerJob)
     }, [])
