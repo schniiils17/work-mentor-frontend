@@ -184,7 +184,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         for (let attempt = 0; attempt <= retries; attempt++) {
             try {
                 const controller = new AbortController()
-                const timeoutId = setTimeout(() => controller.abort(), 30000)
+                const timeoutId = setTimeout(() => controller.abort(), 60000) // 60s Timeout (Railway Cold Start)
 
                 const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
                     method: "POST",
@@ -258,7 +258,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 zieljob,
                 branche,
                 aktueller_job: aktuellerJob,
-            })
+            }, 3) // Mehr Retries für Skill Research (Cold Start)
 
             clearInterval(msgInterval)
             clearInterval(progInterval)
