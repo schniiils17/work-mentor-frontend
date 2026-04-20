@@ -434,6 +434,20 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     }
                     if (response.action?.buttons) {
                         setBubbles(prev => [...prev, { kind: "buttons", buttons: response.action!.buttons, id: nextId() }])
+                    } else if (phase === "assessment") {
+                        // Agent-Message OHNE Buttons während Assessment
+                        // = Übergangstext. Automatisch weiter zur nächsten Frage.
+                        await sleep(500)
+                        processingRef.current = false
+                        try {
+                            const next = await callAgent("/api/assessment/continue", {
+                                session_id: sessionId,
+                            })
+                            await processResponse(next)
+                            return
+                        } catch (err: any) {
+                            // Stille Fehler — User sieht den Übergangstext
+                        }
                     }
                     break
                 }
@@ -781,7 +795,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
                 </div>
                 {/* Progress in header during assessment */}
-                {progress && (phase === "assessment" || phase === "varianz") && (
+                {progress && (
                     <div style={{
                         display: "flex",
                         alignItems: "center",
