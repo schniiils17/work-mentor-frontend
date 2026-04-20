@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Work Mentor — Assessment Test</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body, #root { height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// Setze Test-Session-Daten
+sessionStorage.setItem("wm_session_id", "test-" + Date.now());
+sessionStorage.setItem("targetPosition", "Vertriebsleiter");
+sessionStorage.setItem("currentTitle", "Vertriebstrainer");
+sessionStorage.setItem("industry", "Versicherung");
+</script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const AGENT_BASE_URL = "https://web-production-ad0c4.up.railway.app";
+const SID_STORAGE_KEY = "wm_session_id";
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+let bubbleCounter = 0;
+function nextId() { return `b_${++bubbleCounter}_${Date.now()}`; }
+
+const LOADING_MESSAGES = [
+  "Durchsuche Stellenanzeigen...",
+  "Analysiere Anforderungsprofile...",
+  "Vergleiche Skill-Muster...",
+  "Erkenne Varianz zwischen Positionen...",
+  "Bereite dein Assessment vor...",
+];
+
+function App() {
+  const isMobile = window.innerWidth <= 640;
+  const [phase, setPhase] = React.useState("research");
+  const [bubbles, setBubbles] = React.useState([]);
+  const [sessionId, setSessionId] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [frageNr, setFrageNr] = React.useState(0);
+  const [answered, setAnswered] = React.useState(false);
+  const [startTime, setStartTime] = React.useState(0);
+  const [progress, setProgress] = React.useState(null);
+  const scrollRef = React.useRef(null);
+  const processingRef = React.useRef(false);
+  const phaseRef = React.useRef("research");
+
+  const [researchResult, setResearchResult] = React.useState(null);
+  const [varianzAntworten, setVarianzAntworten] = React.useState([]);
+  const varianzAntwortenRef = React.useRef([]);
+  const [currentVarianzIndex, setCurrentVarianzIndex] = React.useState(0);
+  const [loadingMsg, setLoadingMsg] = React.useState(LOADING_MESSAGES[0]);
+  const [loadingProgress, setLoadingProgress] = React.useState(0);
+  const [jobData, setJobData] = React.useState({ zieljob: "", aktuellerJob: "", branche: "" });
+
+  React.useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [bubbles]);
+
+  async function callAgent(endpoint, body, retries = 2) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 30000);
+        const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body), signal: controller.signal,
+        });
+        clearTimeout(tid);
+        if (!res.ok) { if (attempt < retries) { await sleep(1000*(attempt+1)); continue; } throw new Error(`Agent error: ${res.status}`); }
+        return res.json();
+      } catch (err) {
+        if (attempt < retries) { await sleep(1500*(attempt+1)); continue; }
+        throw err;
+      }
+    }
+    throw new Error("Agent nicht erreichbar.");
+  }
+
+  React.useEffect(() => {
+    const sid = sessionStorage.getItem(SID_STORAGE_KEY) || "";
+    if (!sid) { setLoading(false); setError("Keine Session."); return; }
+    setSessionId(sid);
+    const zieljob = sessionStorage.getItem("targetPosition") || "";
+    const aktuellerJob = sessionStorage.getItem("currentTitle") || "";
+    const branche = sessionStorage.getItem("industry") || "";
+    setJobData({ zieljob, aktuellerJob, branche });
+    if (!zieljob) { setLoading(false); setError("Kein Zieljob."); return; }
+    startResearch(zieljob, branche, aktuellerJob);
+  }, []);
+
+  async function startResearch(zieljob, branche, aktuellerJob) {
+    let msgIndex = 0;
+    const msgInt = setInterval(() => { msgIndex = (msgIndex+1)%LOADING_MESSAGES.length; setLoadingMsg(LOADING_MESSAGES[msgIndex]); }, 2500);
+    let prog = 0;
+    const progInt = setInterval(() => { prog += Math.random()*8+2; if(prog>90) prog=90; setLoadingProgress(prog); }, 500);
+    try {
+      const result = await callAgent("/api/skills/research", { zieljob, branche, aktueller_job: aktuellerJob });
+      clearInterval(msgInt); clearInterval(progInt); setLoadingProgress(100); setResearchResult(result);
+      await sleep(600);
+      if (result.varianz_fragen && result.varianz_fragen.length > 0) {
+        setPhase("varianz"); phaseRef.current = "varianz"; setLoading(false); showVarianzIntro(result);
+      } else {
+        setPhase("assessment"); phaseRef.current = "assessment"; setLoading(false); startAssessment(result.skills, []);
+      }
+    } catch (err) { clearInterval(msgInt); clearInterval(progInt); setLoading(false); setError(`Fehler: ${err.message}`); }
+  }
+
+  async function showVarianzIntro(result) {
+    const sc = result.skills.length;
+    const typId = nextId();
+    setBubbles([{kind:"typing",id:typId}]);
+    await sleep(1200);
+    setBubbles([{kind:"agent",text:`Ich hab ${sc} relevante Skills gefunden.`,id:nextId()}]);
+    await sleep(800);
+    const t2 = nextId();
+    setBubbles(p=>[...p,{kind:"typing",id:t2}]);
+    await sleep(1500);
+    setBubbles(p=>{const f=p.filter(b=>b.id!==t2);return[...f,{kind:"agent",text:"Aber bevor wir starten — ich muss ein paar Sachen wissen.",id:nextId()}]});
+    await sleep(600);
+    showVarianzFrage(0, result.varianz_fragen);
+  }
+
+  function showVarianzFrage(index, fragen) {
+    if (index >= fragen.length) { transitionToAssessment(); return; }
+    setCurrentVarianzIndex(index);
+    setBubbles(p=>[...p,{kind:"varianz",frage:fragen[index],index,id:nextId()}]);
+  }
+
+  async function handleVarianzAnswer(frage, option) {
+    const antwort = { frage: frage.frage, antwort: option.text, skill_anpassung: option.skill_anpassung };
+    setBubbles(p=>[...p,{kind:"user",text:option.text,id:nextId()}]);
+    setVarianzAntworten(p=>{ const u=[...p,antwort]; varianzAntwortenRef.current=u; return u; });
+    await sleep(400);
+    const fragen = researchResult?.varianz_fragen || [];
+    const ni = currentVarianzIndex + 1;
+    if (ni < fragen.length) {
+      const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(900);
+      setBubbles(p=>{const f=p.filter(b=>b.id!==t);return[...f,{kind:"agent",text:"Gut, noch eine kurze Frage.",id:nextId()}]});
+      await sleep(400); showVarianzFrage(ni, fragen);
+    } else { transitionToAssessment(); }
+  }
+
+  async function transitionToAssessment() {
+    const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(1200);
+    setBubbles(p=>{const f=p.filter(b=>b.id!==t);return[...f,{kind:"agent",text:"Alles klar. Jetzt schauen wir mal wie gut du dazu passt.",id:nextId()}]});
+    await sleep(800);
+    setPhase("assessment"); phaseRef.current = "assessment";
+    startAssessment(researchResult?.skills || [], varianzAntwortenRef.current);
+  }
+
+  async function startAssessment(skills, vAntworten) {
+    processingRef.current = false;
+    try {
+      const response = await callAgent("/api/assessment/start", {
+        session_id: sessionId, zieljob: jobData.zieljob, aktueller_job: jobData.aktuellerJob,
+        branche: jobData.branche, researched_skills: skills,
+        varianz_antworten: vAntworten.length > 0 ? vAntworten : undefined,
+      });
+      await processResponse(response);
+    } catch (err) { setError(`Fehler: ${err.message}`); }
+  }
+
+  async function processResponse(response) {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    try {
+      switch (response.typ) {
+        case "agent_message": {
+          for (const msg of response.messages) {
+            const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(msg.delay_ms);
+            setBubbles(p=>p.filter(b=>b.id!==t).concat({kind:"agent",text:msg.text,id:nextId()}));
+          }
+          if (response.action?.buttons) {
+            setBubbles(p=>[...p,{kind:"buttons",buttons:response.action.buttons,id:nextId()}]);
+          } else if (phaseRef.current === "assessment") {
+            await sleep(500);
+            processingRef.current = false;
+            try {
+              const next = await callAgent("/api/assessment/continue", { session_id: sessionId });
+              await processResponse(next); return;
+            } catch(e) {}
+          }
+          break;
+        }
+        case "statement": {
+          setAnswered(false); setStartTime(Date.now());
+          if(response.progress) setProgress(response.progress);
+          setBubbles(p=>[...p,{kind:"statement",data:response,id:nextId()}]); break;
+        }
+        case "forced_choice": {
+          setAnswered(false); setStartTime(Date.now());
+          if(response.progress) setProgress(response.progress);
+          setBubbles(p=>[...p,{kind:"forced_choice",data:response,id:nextId()}]); break;
+        }
+        case "frage": case "praeferenz": {
+          setFrageNr(response.frage_nr); setAnswered(false); setStartTime(Date.now());
+          if(response.progress) setProgress(response.progress);
+          setBubbles(p=>[...p,{kind:"frage",data:response,id:nextId()}]); break;
+        }
+        case "magie_moment": {
+          for (const msg of response.messages) {
+            const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(msg.delay_ms);
+            setBubbles(p=>p.filter(b=>b.id!==t).concat({kind:"agent",text:msg.text,id:nextId()}));
+          }
+          if (response.next) { await sleep(800); processingRef.current=false; await processResponse(response.next); return; }
+          break;
+        }
+        case "abschluss": {
+          for (const msg of response.messages) {
+            const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]); await sleep(msg.delay_ms);
+            setBubbles(p=>p.filter(b=>b.id!==t).concat({kind:"agent",text:msg.text,id:nextId()}));
+          }
+          await sleep(500);
+          setBubbles(p=>[...p,{kind:"dashboard",data:response.dashboard,id:nextId()}]); break;
+        }
+        case "error": { setError(response.message); break; }
+      }
+    } finally { processingRef.current = false; }
+  }
+
+  async function handleButtonClick(btnId) {
+    setBubbles(p=>p.filter(b=>b.kind!=="buttons"));
+    setBubbles(p=>[...p,{kind:"user",text:"Los geht's",id:nextId()}]);
+    const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]);
+    try {
+      const r = await callAgent("/api/assessment/answer",{session_id:sessionId,antwort:btnId});
+      setBubbles(p=>p.filter(b=>b.id!==t)); await processResponse(r);
+    } catch(e) { setBubbles(p=>p.filter(b=>b.id!==t)); setError("Verbindung fehlgeschlagen."); }
+  }
+
+  async function handleOptionClick(optId, optText) {
+    if(answered)return; setAnswered(true); const rt=Date.now()-startTime;
+    setBubbles(p=>[...p,{kind:"user",text:optText,id:nextId()}]);
+    const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]);
+    try {
+      const r = await callAgent("/api/assessment/answer",{session_id:sessionId,frage_nr:frageNr,antwort:optId,reaction_time_ms:rt});
+      setBubbles(p=>p.filter(b=>b.id!==t)); await processResponse(r);
+    } catch(e) { setBubbles(p=>p.filter(b=>b.id!==t)); setBubbles(p=>[...p,{kind:"agent",text:"⚠️ Verbindungsproblem. Versuche es nochmal.",id:nextId()}]); setAnswered(false); }
+  }
+
+  async function handleStatementClick(optId, optText, stNr) {
+    if(answered)return; setAnswered(true); const rt=Date.now()-startTime;
+    setBubbles(p=>[...p,{kind:"user",text:optText,id:nextId()}]);
+    const t=nextId(); setBubbles(p=>[...p,{kind:"typing",id:t}]);
+    try {
+      const r = await callAgent("/api/assessment/answer",{session_id:sessionId,frage_nr:stNr,antwort:optId,reaction_time_ms:rt});
+      setBubbles(p=>p.filter(b=>b.id!==t)); await processResponse(r);
+    } catch(e) { setBubbles(p=>p.filter(b=>b.id!==t)); setBubbles(p=>[...p,{kind:"agent",text:"⚠️ Verbindungsproblem. Versuche es nochmal.",id:nextId()}]); setAnswered(false); }
+  }
+
+  // Styles
+  const container = {width:"100%",maxWidth:680,margin:"0 auto",height:"100vh",display:"flex",flexDirection:"column",background:"#f8fafc",fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'};
+  const chatArea = {flex:1,overflowY:"auto",padding:"24px 20px",display:"flex",flexDirection:"column",gap:12};
+  const agentBub = {maxWidth:"85%",padding:"14px 18px",background:"#fff",borderRadius:"18px 18px 18px 4px",border:"1px solid #e5e7eb",fontSize:15,lineHeight:1.5,color:"#1f2937",alignSelf:"flex-start"};
+  const userBub = {maxWidth:"75%",padding:"12px 18px",background:"linear-gradient(135deg,#2563eb,#1d4ed8)",borderRadius:"18px 18px 4px 18px",fontSize:15,lineHeight:1.5,color:"#fff",alignSelf:"flex-end"};
+
+  if (loading && phase === "research") {
+    return (
+      <div style={{...container,alignItems:"center",justifyContent:"center"}}>
+        <div style={{textAlign:"center",padding:"40px 32px",maxWidth:400}}>
+          <div style={{fontSize:48,marginBottom:20,animation:"pulse 2s infinite ease-in-out"}}>🔍</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#1f2937",marginBottom:8}}>Analysiere den Arbeitsmarkt</div>
+          <div style={{fontSize:13,color:"#6b7280",marginBottom:24}}>{jobData.zieljob} {jobData.branche?`in ${jobData.branche}`:""}</div>
+          <div style={{width:"100%",height:6,background:"#e5e7eb",borderRadius:3,overflow:"hidden",marginBottom:16}}>
+            <div style={{width:`${loadingProgress}%`,height:"100%",borderRadius:3,background:"linear-gradient(90deg,#06b6d4,#2563eb)",transition:"width 0.5s ease"}}/>
+          </div>
+          <div style={{fontSize:13,color:"#2563eb",fontWeight:500}}>{loadingMsg}</div>
+        </div>
+        <style>{`@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}`}</style>
+      </div>
+    );
+  }
+
+  if (error) return <div style={{...container,alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:24}}><div style={{fontSize:40,marginBottom:16}}>😕</div><div style={{fontSize:15,color:"#b91c1c"}}>{error}</div></div></div>;
+  if (loading) return <div style={{...container,alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center"}}><div style={{fontSize:40,marginBottom:16}}>🤖</div><div style={{fontSize:15,color:"#6b7280"}}>Agent wird verbunden...</div></div></div>;
+
+  return (
+    <div style={container}>
+      <div style={{padding:"16px 20px",borderBottom:"1px solid #e5e7eb",background:"#fff",display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#06b6d4,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🤖</div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:14,fontWeight:600,color:"#1f2937"}}>Work Mentor</div>
+          <div style={{fontSize:11,color:"#10b981"}}>● Online</div>
+        </div>
+        {progress && (
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",background:"#f1f5f9",borderRadius:16}}>
+            <div style={{width:40,height:3,borderRadius:2,background:"#e2e8f0",overflow:"hidden"}}>
+              <div style={{width:`${Math.round((progress.current/progress.estimated_total)*100)}%`,height:"100%",background:"linear-gradient(90deg,#06b6d4,#2563eb)",transition:"width 0.3s ease"}}/>
+            </div>
+            <span style={{fontSize:10,color:"#64748b",fontWeight:500}}>{progress.current}/{progress.estimated_total}</span>
+          </div>
+        )}
+      </div>
+      <div ref={scrollRef} style={chatArea}>
+        {bubbles.map(b => {
+          switch(b.kind) {
+            case "agent": return <div key={b.id} style={agentBub}>{b.text}</div>;
+            case "user": return <div key={b.id} style={userBub}>{b.text}</div>;
+            case "typing": return <div key={b.id} style={{...agentBub,display:"flex",gap:4,padding:"14px 20px"}}>{[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#9ca3af",animation:`dot 1.4s infinite ease-in-out both`,animationDelay:`${i*0.16}s`}}/>)}</div>;
+            case "buttons": return <div key={b.id} style={{display:"flex",gap:8,alignSelf:"flex-start"}}>{b.buttons.map(btn=><button key={btn.id} onClick={()=>handleButtonClick(btn.id)} style={{padding:"10px 24px",borderRadius:24,border:"none",background:"linear-gradient(135deg,#2563eb,#1d4ed8)",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer"}}>{btn.text}</button>)}</div>;
+            case "statement": return (
+              <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                <div style={{...agentBub,fontStyle:"italic",marginBottom:12,fontSize:16,maxWidth:"100%"}}>„{b.data.text}"</div>
+                <div style={{display:"flex",gap:10}}>
+                  {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleStatementClick(o.id,o.text,b.data.statement_nr)} style={{flex:1,padding:"14px 20px",borderRadius:14,border:"2px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:16,fontWeight:600,cursor:"pointer",transition:"all 0.2s ease"}} onMouseEnter={e=>{e.target.style.borderColor=o.id==="A"?"#10b981":"#ef4444";e.target.style.background=o.id==="A"?"#f0fdf4":"#fef2f2"}} onMouseLeave={e=>{e.target.style.borderColor="#e5e7eb";e.target.style.background="#fff"}}>{o.id==="A"?"✓ ":"✗ "}{o.text}</button>)}
+                </div>
+              </div>
+            );
+            case "forced_choice": return (
+              <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                <div style={{...agentBub,marginBottom:12,maxWidth:"100%"}}>{b.data.frage}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleStatementClick(o.id,o.text,b.data.statement_nr)} style={{width:"100%",textAlign:"left",padding:"18px 22px",borderRadius:14,border:"2px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:16,lineHeight:1.5,cursor:"pointer",transition:"all 0.2s ease"}} onMouseEnter={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#f0f7ff"}} onMouseLeave={e=>{e.target.style.borderColor="#e5e7eb";e.target.style.background="#fff"}}>{o.text}</button>)}
+                </div>
+              </div>
+            );
+            case "varianz": return (
+              <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                <div style={{...agentBub,marginBottom:10,maxWidth:"100%"}}>{b.frage.frage}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {b.frage.optionen.map((o,i)=><button key={i} onClick={()=>handleVarianzAnswer(b.frage,o)} style={{width:"100%",textAlign:"left",padding:"16px 20px",borderRadius:14,border:"2px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:15,lineHeight:1.5,cursor:"pointer",transition:"all 0.2s ease"}} onMouseEnter={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#f0f7ff"}} onMouseLeave={e=>{e.target.style.borderColor="#e5e7eb";e.target.style.background="#fff"}}>{o.text}</button>)}
+                </div>
+              </div>
+            );
+            case "frage": return (
+              <div key={b.id} style={{alignSelf:"flex-start",width:"100%",maxWidth:"95%"}}>
+                <div style={{...agentBub,marginBottom:10,maxWidth:"100%"}}>{b.data.frage}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {b.data.optionen.map(o=><button key={o.id} onClick={()=>handleOptionClick(o.id,o.text)} style={{width:"100%",textAlign:"left",padding:"14px 18px",borderRadius:12,border:"1px solid #e5e7eb",borderLeft:"4px solid #e5e7eb",background:"#fff",color:"#374151",fontSize:15,lineHeight:1.45,cursor:"pointer",transition:"all 0.15s ease"}} onMouseEnter={e=>{e.target.style.borderLeftColor="#2563eb";e.target.style.background="#f0f7ff"}} onMouseLeave={e=>{e.target.style.borderLeftColor="#e5e7eb";e.target.style.background="#fff"}}><span style={{display:"inline-block",width:22,height:22,lineHeight:"22px",textAlign:"center",borderRadius:6,background:"#f1f5f9",color:"#64748b",fontSize:12,fontWeight:600,marginRight:10,verticalAlign:"middle"}}>{o.id}</span>{o.text}</button>)}
+                </div>
+              </div>
+            );
+            case "dashboard": return <div key={b.id} style={{width:"100%",background:"#fff",borderRadius:18,border:"1px solid #e5e7eb",boxShadow:"0 8px 30px rgba(0,0,0,0.06)",overflow:"hidden",alignSelf:"flex-start"}}>
+              <div style={{padding:"32px 24px",background:"linear-gradient(135deg,#0f172a,#1e293b)",color:"#fff",textAlign:"center"}}>
+                <div style={{fontSize:48,fontWeight:800}}>{b.data.match_score}%</div>
+                <div style={{fontSize:14,color:"#94a3b8",marginTop:4}}>{b.data.match_label}</div>
+              </div>
+              <div style={{padding:24}}>
+                {b.data.dimensions?.map((d,i)=><div key={i} style={{marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,fontWeight:600,color:"#374151"}}>{d.skill}</span><span style={{fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:12,background:d.bewertung==="Stärke"?"#dcfce7":"#dbeafe",color:d.bewertung==="Stärke"?"#166534":"#1e40af"}}>{d.bewertung}</span></div>
+                  <div style={{height:6,background:"#f1f5f9",borderRadius:3,overflow:"hidden"}}><div style={{width:`${d.score}%`,height:"100%",borderRadius:3,background:d.bewertung==="Stärke"?"#22c55e":"#3b82f6"}}/></div>
+                  <p style={{fontSize:12,color:"#6b7280",margin:"4px 0 0",lineHeight:1.4}}>{d.insight}</p>
+                </div>)}
+                {b.data.hauptgap && <div style={{padding:14,background:"#fffbeb",borderRadius:10,marginTop:16,borderLeft:"3px solid #f59e0b"}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#92400e"}}>🎯 {b.data.hauptgap.skill}</div>
+                  <div style={{fontSize:12,color:"#374151",marginTop:4,lineHeight:1.5}}>{b.data.hauptgap.hauptluecke}</div>
+                </div>}
+                {b.data.buchempfehlung && <div style={{marginTop:20,padding:16,background:"#eff6ff",borderRadius:12,textAlign:"center"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#1e40af",marginBottom:4}}>📚 Empfohlen</div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#1f2937"}}>{b.data.buchempfehlung.titel}</div>
+                  <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>von {b.data.buchempfehlung.autor}</div>
+                  <a href={`https://www.amazon.de/s?k=${encodeURIComponent(b.data.buchempfehlung.amazon_suchbegriff)}&tag=workmentor21-21`} target="_blank" style={{display:"inline-block",marginTop:12,padding:"10px 24px",background:"#f59e0b",color:"#fff",borderRadius:24,fontSize:13,fontWeight:600,textDecoration:"none"}}>Auf Amazon ansehen</a>
+                </div>}
+              </div>
+            </div>;
+            default: return null;
+          }
+        })}
+      </div>
+      <style>{`@keyframes dot{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
