@@ -1,9 +1,9 @@
 import * as React from "react"
 
 /**
- * WMAssessmentChat – Work Mentor Agent v2.0
+ * WMAssessmentChat – Work Mentor Agent v2.1
  * Chat-basierte Assessment-Komponente für Framer.
- * Ersetzt WMQuestions.tsx — spricht den Agent-Server direkt an.
+ * NEU: Skill-Research + Varianz-Fragen VOR dem Assessment.
  *
  * @framerSupportedLayoutWidth any
  * @framerSupportedLayoutHeight any
@@ -56,6 +56,29 @@ type AgentResponse =
     | { typ: "abschluss"; messages: AgentMessage[]; dashboard: Dashboard }
     | { typ: "error"; code: string; message: string }
 
+// Skill Research Types
+type ResearchedSkill = {
+    name: string
+    kategorie: string
+    gewichtung: number
+    belege: string[]
+    varianz: string
+    varianz_erklaerung: string
+}
+type VarianzOption = { text: string; skill_anpassung: string }
+type VarianzFrage = {
+    frage: string
+    grund: string
+    beeinflusst_skills: string[]
+    optionen: VarianzOption[]
+}
+type SkillResearchResult = {
+    skills: ResearchedSkill[]
+    varianz_fragen: VarianzFrage[]
+    meta: Record<string, unknown>
+}
+type VarianzAntwort = { frage: string; antwort: string; skill_anpassung: string }
+
 // Chat-Bubble types for rendering
 type ChatBubble =
     | { kind: "agent"; text: string; id: string }
@@ -64,6 +87,10 @@ type ChatBubble =
     | { kind: "buttons"; buttons: ButtonAction[]; id: string }
     | { kind: "typing"; id: string }
     | { kind: "dashboard"; data: Dashboard; id: string }
+    | { kind: "varianz"; frage: VarianzFrage; index: number; id: string }
+
+// App phases
+type Phase = "research" | "varianz" | "assessment"
 
 type Props = {
     maxWidth?: number
@@ -92,10 +119,25 @@ function nextId(): string {
     return `b_${++bubbleCounter}_${Date.now()}`
 }
 
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ─── Loading Messages ─────────────────────────────────────────
+
+const LOADING_MESSAGES = [
+    "Durchsuche Stellenanzeigen...",
+    "Analysiere Anforderungsprofile...",
+    "Vergleiche Skill-Muster...",
+    "Erkenne Varianz zwischen Positionen...",
+    "Bereite dein Assessment vor...",
+]
+
 // ─── Component ────────────────────────────────────────────────
 
 export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const isMobile = useIsMobile()
+    const [phase, setPhase] = React.useState<Phase>("research")
     const [bubbles, setBubbles] = React.useState<ChatBubble[]>([])
     const [sessionId, setSessionId] = React.useState("")
     const [loading, setLoading] = React.useState(true)
@@ -107,6 +149,16 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const processingRef = React.useRef(false)
 
+    // Research state
+    const [researchResult, setResearchResult] = React.useState<SkillResearchResult | null>(null)
+    const [varianzAntworten, setVarianzAntworten] = React.useState<VarianzAntwort[]>([])
+    const [currentVarianzIndex, setCurrentVarianzIndex] = React.useState(0)
+    const [loadingMsg, setLoadingMsg] = React.useState(LOADING_MESSAGES[0])
+    const [loadingProgress, setLoadingProgress] = React.useState(0)
+
+    // Session data from sessionStorage
+    const [jobData, setJobData] = React.useState({ zieljob: "", aktuellerJob: "", branche: "" })
+
     // Auto-scroll
     React.useEffect(() => {
         if (scrollRef.current) {
@@ -116,7 +168,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
     // ─── Agent API calls ───────────────────────────────────────
 
-    async function callAgent(endpoint: string, body: Record<string, unknown>): Promise<AgentResponse> {
+    async function callAgent(endpoint: string, body: Record<string, unknown>): Promise<any> {
         const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -124,6 +176,211 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         })
         if (!res.ok) throw new Error(`Agent error: ${res.status}`)
         return res.json()
+    }
+
+    // ─── Phase 1: Skill Research ──────────────────────────────
+
+    React.useEffect(() => {
+        const sid = getSid()
+        if (!sid) {
+            setLoading(false)
+            setError("Keine Session gefunden. Bitte starte von der Startseite.")
+            return
+        }
+        setSessionId(sid)
+
+        const zieljob = sessionStorage.getItem("targetPosition") || ""
+        const aktuellerJob = sessionStorage.getItem("currentTitle") || ""
+        const branche = sessionStorage.getItem("industry") || ""
+        setJobData({ zieljob, aktuellerJob, branche })
+
+        if (!zieljob) {
+            setLoading(false)
+            setError("Kein Zieljob gefunden. Bitte starte von der Startseite.")
+            return
+        }
+
+        // Start Skill Research
+        startResearch(zieljob, branche, aktuellerJob)
+    }, [])
+
+    async function startResearch(zieljob: string, branche: string, aktuellerJob: string) {
+        // Animate loading messages
+        let msgIndex = 0
+        const msgInterval = setInterval(() => {
+            msgIndex = (msgIndex + 1) % LOADING_MESSAGES.length
+            setLoadingMsg(LOADING_MESSAGES[msgIndex])
+        }, 2500)
+
+        // Animate progress bar
+        let prog = 0
+        const progInterval = setInterval(() => {
+            prog += Math.random() * 8 + 2
+            if (prog > 90) prog = 90
+            setLoadingProgress(prog)
+        }, 500)
+
+        try {
+            const result: SkillResearchResult = await callAgent("/api/skills/research", {
+                zieljob,
+                branche,
+                aktueller_job: aktuellerJob,
+            })
+
+            clearInterval(msgInterval)
+            clearInterval(progInterval)
+            setLoadingProgress(100)
+            setResearchResult(result)
+
+            await sleep(600)
+
+            // Wenn Varianz-Fragen vorhanden → Phase varianz
+            if (result.varianz_fragen && result.varianz_fragen.length > 0) {
+                setPhase("varianz")
+                setLoading(false)
+                // Zeige erste Varianz-Frage als Chat
+                showVarianzIntro(result)
+            } else {
+                // Keine Varianz-Fragen → direkt zum Assessment
+                setPhase("assessment")
+                setLoading(false)
+                startAssessment(result.skills, [])
+            }
+        } catch (err: any) {
+            clearInterval(msgInterval)
+            clearInterval(progInterval)
+            setLoading(false)
+            setError(`Skill-Analyse fehlgeschlagen: ${err.message}`)
+        }
+    }
+
+    // ─── Phase 2: Varianz-Fragen ──────────────────────────────
+
+    async function showVarianzIntro(result: SkillResearchResult) {
+        const skillCount = result.skills.length
+        const meta = result.meta as any
+
+        // Agent intro messages
+        const introId1 = nextId()
+        setBubbles([{ kind: "typing", id: introId1 }])
+        await sleep(1200)
+        setBubbles([{
+            kind: "agent",
+            text: `Ich hab ${meta?.stellenanzeigen_gefunden || skillCount} Stellenanzeigen analysiert und ${skillCount} relevante Skills gefunden.`,
+            id: nextId()
+        }])
+
+        await sleep(800)
+        const introId2 = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: introId2 }])
+        await sleep(1500)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== introId2)
+            return [...filtered, {
+                kind: "agent",
+                text: "Aber bevor wir starten — ich muss ein paar Sachen wissen, weil die Stellenanzeigen sich bei manchen Punkten unterscheiden.",
+                id: nextId()
+            }]
+        })
+
+        await sleep(600)
+        // Zeige erste Varianz-Frage
+        showVarianzFrage(0, result.varianz_fragen)
+    }
+
+    function showVarianzFrage(index: number, fragen: VarianzFrage[]) {
+        if (index >= fragen.length) {
+            // Alle Varianz-Fragen beantwortet → Assessment starten
+            transitionToAssessment()
+            return
+        }
+
+        setCurrentVarianzIndex(index)
+        setBubbles(prev => [...prev, {
+            kind: "varianz",
+            frage: fragen[index],
+            index,
+            id: nextId()
+        }])
+    }
+
+    async function handleVarianzAnswer(frage: VarianzFrage, option: VarianzOption) {
+        const antwort: VarianzAntwort = {
+            frage: frage.frage,
+            antwort: option.text,
+            skill_anpassung: option.skill_anpassung,
+        }
+
+        // User-Antwort als Bubble
+        setBubbles(prev => [...prev, { kind: "user", text: option.text, id: nextId() }])
+
+        setVarianzAntworten(prev => {
+            const updated = [...prev, antwort]
+            return updated
+        })
+
+        await sleep(400)
+
+        // Nächste Varianz-Frage oder Assessment
+        const fragen = researchResult?.varianz_fragen || []
+        const nextIndex = currentVarianzIndex + 1
+
+        if (nextIndex < fragen.length) {
+            // Kurzer Agent-Kommentar
+            const typingId = nextId()
+            setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
+            await sleep(900)
+            setBubbles(prev => {
+                const filtered = prev.filter(b => b.id !== typingId)
+                return [...filtered, {
+                    kind: "agent",
+                    text: "Gut, noch eine kurze Frage.",
+                    id: nextId()
+                }]
+            })
+            await sleep(400)
+            showVarianzFrage(nextIndex, fragen)
+        } else {
+            transitionToAssessment()
+        }
+    }
+
+    async function transitionToAssessment() {
+        // Übergang zum Assessment
+        const typingId = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
+        await sleep(1200)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== typingId)
+            return [...filtered, {
+                kind: "agent",
+                text: "Alles klar. Ich weiß jetzt genug über die Position. Jetzt schauen wir mal wie gut du dazu passt.",
+                id: nextId()
+            }]
+        })
+
+        await sleep(800)
+        setPhase("assessment")
+        // Verwende den aktuellen State für varianzAntworten
+        startAssessment(researchResult?.skills || [], varianzAntworten)
+    }
+
+    // ─── Phase 3: Assessment ──────────────────────────────────
+
+    async function startAssessment(skills: ResearchedSkill[], vAntworten: VarianzAntwort[]) {
+        try {
+            const response = await callAgent("/api/assessment/start", {
+                session_id: sessionId,
+                zieljob: jobData.zieljob,
+                aktueller_job: jobData.aktuellerJob,
+                branche: jobData.branche,
+                researched_skills: skills,
+                varianz_antworten: vAntworten.length > 0 ? vAntworten : undefined,
+            })
+            await processResponse(response)
+        } catch (err: any) {
+            setError(`Agent-Verbindung fehlgeschlagen: ${err.message}`)
+        }
     }
 
     // ─── Process agent response ───────────────────────────────
@@ -135,7 +392,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         try {
             switch (response.typ) {
                 case "agent_message": {
-                    // Show typing, then each message with delay
                     for (const msg of response.messages) {
                         const typingId = nextId()
                         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
@@ -144,7 +400,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                             prev.filter(b => b.id !== typingId).concat({ kind: "agent", text: msg.text, id: nextId() })
                         )
                     }
-                    // Show buttons if present
                     if (response.action?.buttons) {
                         setBubbles(prev => [...prev, { kind: "buttons", buttons: response.action!.buttons, id: nextId() }])
                     }
@@ -164,7 +419,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 }
 
                 case "magie_moment": {
-                    // Show magie messages
                     for (const msg of response.messages) {
                         const typingId = nextId()
                         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
@@ -173,7 +427,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                             prev.filter(b => b.id !== typingId).concat({ kind: "agent", text: msg.text, id: nextId() })
                         )
                     }
-                    // Then show the next question
                     if (response.next) {
                         await sleep(800)
                         processingRef.current = false
@@ -184,7 +437,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 }
 
                 case "abschluss": {
-                    // Show closing messages
                     for (const msg of response.messages) {
                         const typingId = nextId()
                         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
@@ -194,7 +446,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                         )
                     }
                     await sleep(500)
-                    // Show dashboard
                     setBubbles(prev => [...prev, { kind: "dashboard", data: response.dashboard, id: nextId() }])
                     break
                 }
@@ -209,49 +460,10 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
-    // ─── Start session ─────────────────────────────────────────
-
-    React.useEffect(() => {
-        const sid = getSid()
-        if (!sid) {
-            setLoading(false)
-            setError("Keine Session gefunden. Bitte starte von der Startseite.")
-            return
-        }
-        setSessionId(sid)
-
-        const zieljob = sessionStorage.getItem("targetPosition") || ""
-        const aktuellerJob = sessionStorage.getItem("currentTitle") || ""
-        const branche = sessionStorage.getItem("industry") || ""
-
-        if (!zieljob) {
-            setLoading(false)
-            setError("Kein Zieljob gefunden. Bitte starte von der Startseite.")
-            return
-        }
-
-        callAgent("/api/assessment/start", {
-            session_id: sid,
-            zieljob,
-            aktueller_job: aktuellerJob,
-            branche,
-        })
-            .then(response => {
-                setLoading(false)
-                processResponse(response)
-            })
-            .catch(err => {
-                setLoading(false)
-                setError(`Verbindung zum Agent fehlgeschlagen: ${err.message}`)
-            })
-    }, [])
-
     // ─── Handle user actions ──────────────────────────────────
 
     async function handleButtonClick(buttonId: string) {
-        // Remove buttons from chat
         setBubbles(prev => prev.filter(b => b.kind !== "buttons"))
-        // Add user bubble
         setBubbles(prev => [...prev, { kind: "user", text: "Los geht's", id: nextId() }])
 
         try {
@@ -270,18 +482,8 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         setAnswered(true)
         const reactionTime = Date.now() - startTime
 
-        // Add user answer as bubble
-        setBubbles(prev => {
-            // Remove the question card
-            const withoutLastFrage = [...prev]
-            const lastFrageIdx = withoutLastFrage.findLastIndex(b => b.kind === "frage")
-            if (lastFrageIdx >= 0) {
-                // Keep the frage but mark it as answered (we'll grey it out)
-            }
-            return [...prev, { kind: "user", text: optionText, id: nextId() }]
-        })
+        setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
 
-        // Show typing
         const typingId = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
@@ -292,19 +494,12 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 antwort: optionId,
                 reaction_time_ms: reactionTime,
             })
-            // Remove typing
             setBubbles(prev => prev.filter(b => b.id !== typingId))
             await processResponse(response)
         } catch (err: any) {
             setBubbles(prev => prev.filter(b => b.id !== typingId))
             setError(`Fehler: ${err.message}`)
         }
-    }
-
-    // ─── Render helpers ───────────────────────────────────────
-
-    function sleep(ms: number): Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms))
     }
 
     // ─── Styles ───────────────────────────────────────────────
@@ -359,18 +554,85 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         padding: "14px 20px",
     }
 
-    // ─── Loading ──────────────────────────────────────────────
+    // ─── Phase 1: Research Loading Screen ─────────────────────
 
-    if (loading) {
+    if (loading && phase === "research") {
         return (
             <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 40, marginBottom: 16 }}>🤖</div>
-                    <div style={{ fontSize: 15, color: "#6b7280" }}>Agent wird verbunden...</div>
+                <div style={{
+                    textAlign: "center",
+                    padding: isMobile ? "24px 20px" : "40px 32px",
+                    maxWidth: 400,
+                }}>
+                    {/* Animated icon */}
+                    <div style={{
+                        fontSize: 48,
+                        marginBottom: 20,
+                        animation: "wmPulse 2s infinite ease-in-out",
+                    }}>
+                        🔍
+                    </div>
+
+                    {/* Title */}
+                    <div style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color: "#1f2937",
+                        marginBottom: 8,
+                    }}>
+                        Analysiere den Arbeitsmarkt
+                    </div>
+
+                    {/* Subtitle with job */}
+                    <div style={{
+                        fontSize: 13,
+                        color: "#6b7280",
+                        marginBottom: 24,
+                    }}>
+                        {jobData.zieljob} {jobData.branche ? `in ${jobData.branche}` : ""}
+                    </div>
+
+                    {/* Progress bar */}
+                    <div style={{
+                        width: "100%",
+                        height: 6,
+                        background: "#e5e7eb",
+                        borderRadius: 3,
+                        overflow: "hidden",
+                        marginBottom: 16,
+                    }}>
+                        <div style={{
+                            width: `${loadingProgress}%`,
+                            height: "100%",
+                            borderRadius: 3,
+                            background: "linear-gradient(90deg, #06b6d4, #2563eb)",
+                            transition: "width 0.5s ease",
+                        }} />
+                    </div>
+
+                    {/* Loading message */}
+                    <div style={{
+                        fontSize: 13,
+                        color: "#2563eb",
+                        fontWeight: 500,
+                        minHeight: 20,
+                        transition: "opacity 0.3s ease",
+                    }}>
+                        {loadingMsg}
+                    </div>
                 </div>
+
+                <style>{`
+                    @keyframes wmPulse {
+                        0%, 100% { transform: scale(1); }
+                        50% { transform: scale(1.1); }
+                    }
+                `}</style>
             </div>
         )
     }
+
+    // ─── Error screen ─────────────────────────────────────────
 
     if (error) {
         return (
@@ -378,6 +640,19 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 <div style={{ textAlign: "center", padding: 24 }}>
                     <div style={{ fontSize: 40, marginBottom: 16 }}>😕</div>
                     <div style={{ fontSize: 15, color: "#b91c1c" }}>{error}</div>
+                </div>
+            </div>
+        )
+    }
+
+    // ─── Generic loading ──────────────────────────────────────
+
+    if (loading) {
+        return (
+            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                <div style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: 40, marginBottom: 16 }}>🤖</div>
+                    <div style={{ fontSize: 15, color: "#6b7280" }}>Agent wird verbunden...</div>
                 </div>
             </div>
         )
@@ -416,6 +691,29 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937" }}>Work Mentor</div>
                     <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
                 </div>
+                {/* Progress in header during assessment */}
+                {progress && phase === "assessment" && (
+                    <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "4px 10px",
+                        background: "#f1f5f9",
+                        borderRadius: 16,
+                    }}>
+                        <div style={{ width: 40, height: 3, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
+                            <div style={{
+                                width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
+                                height: "100%",
+                                background: "linear-gradient(90deg, #06b6d4, #2563eb)",
+                                transition: "width 0.3s ease",
+                            }} />
+                        </div>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 500 }}>
+                            {progress.current}/{progress.estimated_total}
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Chat Area */}
@@ -479,35 +777,19 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                                 </div>
                             )
 
+                        case "varianz":
+                            return (
+                                <VarianzCard
+                                    key={bubble.id}
+                                    frage={bubble.frage}
+                                    isMobile={isMobile}
+                                    onAnswer={(option) => handleVarianzAnswer(bubble.frage, option)}
+                                />
+                            )
+
                         case "frage":
                             return (
                                 <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
-                                    {/* Floating progress pill */}
-                                    {progress && (
-                                        <div style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: 8,
-                                            marginBottom: 10,
-                                            padding: "6px 14px",
-                                            background: "#f1f5f9",
-                                            borderRadius: 20,
-                                            width: "fit-content",
-                                        }}>
-                                            <div style={{ width: 60, height: 4, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
-                                                <div style={{
-                                                    width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
-                                                    height: "100%",
-                                                    borderRadius: 2,
-                                                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
-                                                    transition: "width 0.3s ease",
-                                                }} />
-                                            </div>
-                                            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
-                                                {progress.current} von ~{progress.estimated_total}
-                                            </span>
-                                        </div>
-                                    )}
                                     {/* Question text as agent bubble */}
                                     <div style={{ ...agentBubbleStyle, marginBottom: 10, maxWidth: "100%" }}>
                                         {bubble.data.frage}
@@ -580,13 +862,92 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 })}
             </div>
 
-            {/* CSS for typing animation */}
+            {/* CSS for animations */}
             <style>{`
                 @keyframes wmTypingDot {
                     0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
                     40% { transform: scale(1); opacity: 1; }
                 }
             `}</style>
+        </div>
+    )
+}
+
+// ─── Varianz Card ────────────────────────────────────────────
+
+function VarianzCard({
+    frage,
+    isMobile,
+    onAnswer
+}: {
+    frage: VarianzFrage
+    isMobile: boolean
+    onAnswer: (option: VarianzOption) => void
+}) {
+    const [answered, setAnswered] = React.useState(false)
+
+    return (
+        <div style={{
+            alignSelf: "flex-start",
+            width: "100%",
+            maxWidth: "95%",
+        }}>
+            {/* Frage als Agent-Bubble */}
+            <div style={{
+                maxWidth: "85%",
+                padding: isMobile ? "12px 14px" : "14px 18px",
+                background: "#fff",
+                borderRadius: "18px 18px 18px 4px",
+                border: "1px solid #e5e7eb",
+                fontSize: isMobile ? 14 : 15,
+                lineHeight: 1.5,
+                color: "#1f2937",
+                marginBottom: 10,
+            }}>
+                {frage.frage}
+            </div>
+
+            {/* Optionen als große Karten */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {frage.optionen.map((opt, i) => (
+                    <button
+                        key={i}
+                        onClick={() => {
+                            if (answered) return
+                            setAnswered(true)
+                            onAnswer(opt)
+                        }}
+                        disabled={answered}
+                        style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: isMobile ? "14px 16px" : "16px 20px",
+                            borderRadius: 14,
+                            border: "2px solid #e5e7eb",
+                            background: "#fff",
+                            color: "#374151",
+                            fontSize: isMobile ? 14 : 15,
+                            lineHeight: 1.5,
+                            cursor: answered ? "default" : "pointer",
+                            opacity: answered ? 0.5 : 1,
+                            transition: "all 0.2s ease",
+                            boxSizing: "border-box",
+                        }}
+                        onMouseEnter={e => {
+                            if (!answered) {
+                                ;(e.target as HTMLButtonElement).style.borderColor = "#2563eb"
+                                ;(e.target as HTMLButtonElement).style.background = "#f0f7ff"
+                            }
+                        }}
+                        onMouseLeave={e => {
+                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
+                            ;(e.target as HTMLButtonElement).style.background = "#fff"
+                        }}
+                    >
+                        {opt.text}
+                    </button>
+                ))}
+            </div>
         </div>
     )
 }
