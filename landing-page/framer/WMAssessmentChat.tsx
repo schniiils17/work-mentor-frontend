@@ -341,6 +341,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
         setVarianzAntworten(prev => {
             const updated = [...prev, antwort]
+            varianzAntwortenRef.current = updated
             return updated
         })
 
@@ -370,6 +371,9 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
+    // Ref um varianzAntworten synchron zu tracken (React State ist async)
+    const varianzAntwortenRef = React.useRef<VarianzAntwort[]>([])
+
     async function transitionToAssessment() {
         // Übergang zum Assessment
         const typingId = nextId()
@@ -386,13 +390,16 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
         await sleep(800)
         setPhase("assessment")
-        // Verwende den aktuellen State für varianzAntworten
-        startAssessment(researchResult?.skills || [], varianzAntworten)
+        // Verwende Ref statt State (synchron, immer aktuell)
+        startAssessment(researchResult?.skills || [], varianzAntwortenRef.current)
     }
 
     // ─── Phase 3: Assessment ──────────────────────────────────
 
     async function startAssessment(skills: ResearchedSkill[], vAntworten: VarianzAntwort[]) {
+        // Sicherstellen dass processingRef frei ist
+        processingRef.current = false
+
         try {
             const response = await callAgent("/api/assessment/start", {
                 session_id: sessionId,
