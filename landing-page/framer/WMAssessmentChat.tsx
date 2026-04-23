@@ -176,6 +176,12 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const [loadingMsg, setLoadingMsg] = React.useState(LOADING_MESSAGES[0])
     const [loadingProgress, setLoadingProgress] = React.useState(0)
 
+    // Assessment items (fester Pool)
+    const [assessmentItems, setAssessmentItems] = React.useState<any[]>([])
+    const [currentItemIndex, setCurrentItemIndex] = React.useState(0)
+    const [assessmentAnswers, setAssessmentAnswers] = React.useState<{item_id: string; antwort: string; item_text: string}[]>([])
+    const [diagnostikStrategy, setDiagnostikStrategy] = React.useState<Record<string, unknown> | null>(null)
+
     // Session data from sessionStorage
     const [jobData, setJobData] = React.useState({ zieljob: "", aktuellerJob: "", branche: "" })
 
@@ -472,58 +478,146 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         const typingId2 = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId2 }])
 
-        // Während der User die Animation sieht: Diagnostik-Strategie im Hintergrund laden
-        let diagnostikStrategy: Record<string, unknown> | null = null
-        try {
-            diagnostikStrategy = await callAgent("/api/skills/diagnostik", {
+        // Parallel laden: Assessment Items + Diagnostik-Strategie
+        const [itemsResult, diagResult] = await Promise.allSettled([
+            callAgent("/api/assessment/items", { session_id: sessionId }, 2),
+            callAgent("/api/skills/diagnostik", {
                 zieljob: jobData.zieljob,
                 branche: jobData.branche,
                 skills: (researchResult?.skills || []).map(s => ({ name: s.name, kategorie: s.kategorie })),
                 job_beschreibung: jobBeschreibung,
             }, 1)
-        } catch (err) {
-            // Kein Fehler zeigen — Agent arbeitet ohne Strategie weiter
+        ])
+
+        // Items setzen
+        if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
+            setAssessmentItems(itemsResult.value.items)
+            setCurrentItemIndex(0)
+            setAssessmentAnswers([])
+        } else {
+            setError("Assessment konnte nicht geladen werden. Bitte lade die Seite neu.")
+            return
+        }
+
+        // Diagnostik-Strategie speichern (optional)
+        if (diagResult.status === "fulfilled") {
+            setDiagnostikStrategy(diagResult.value)
         }
 
         setBubbles(prev => {
             const filtered = prev.filter(b => b.id !== typingId2)
             return [...filtered, {
                 kind: "agent",
-                text: "Jetzt zeig ich dir ein paar Situationen — sag mir einfach was du machst.",
+                text: "Ich zeige dir jetzt ein paar Aussagen. Sag mir einfach ob sie auf dich zutreffen.",
                 id: nextId()
             }]
         })
 
         await sleep(600)
         setPhase("assessment")
-        // Typing während der Agent geladen wird
-        const typingId3 = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId3 }])
-        // Verwende Ref statt State (synchron, immer aktuell)
-        await startAssessment(researchResult?.skills || [], varianzAntwortenRef.current, diagnostikStrategy)
-        // Typing wird durch processResponse entfernt
-        setBubbles(prev => prev.filter(b => b.id !== typingId3))
+
+        // Intro-Nachrichten
+        const introTyping = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: introTyping }])
+        await sleep(1200)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== introTyping)
+            return [...filtered, {
+                kind: "agent",
+                text: "Antworte spontan — es gibt kein richtig oder falsch.",
+                id: nextId()
+            }]
+        })
+
+        await sleep(500)
+        // Erstes Item zeigen
+        showNextItem(0)
     }
 
-    // ─── Phase 3: Assessment ──────────────────────────────────
+    // ─── Phase 3: Assessment (feste Items) ────────────────────
 
-    async function startAssessment(skills: ResearchedSkill[], vAntworten: VarianzAntwort[], diagnostikStrategy?: Record<string, unknown> | null) {
-        // Sicherstellen dass processingRef frei ist
-        processingRef.current = false
+    function showNextItem(index: number) {
+        if (index >= assessmentItems.length) {
+            finishAssessment()
+            return
+        }
+
+        const item = assessmentItems[index]
+        setCurrentItemIndex(index)
+        setAnswered(false)
+        setStartTime(Date.now())
+
+        if (item.typ === "statement") {
+            setBubbles(prev => [...prev, {
+                kind: "statement" as const,
+                data: item,
+                id: nextId()
+            }])
+        } else if (item.typ === "forced_choice") {
+            setBubbles(prev => [...prev, {
+                kind: "forced_choice" as const,
+                data: item,
+                id: nextId()
+            }])
+        }
+    }
+
+    async function handleItemAnswer(itemId: string, optionId: string, optionText: string, itemText: string) {
+        if (answered) return
+        setAnswered(true)
+
+        const newAnswer = { item_id: itemId, antwort: optionId, item_text: itemText }
+        setAssessmentAnswers(prev => [...prev, newAnswer])
+
+        setBubbles(prev => [...prev, { kind: "user" as const, text: optionText, id: nextId() }])
+
+        await sleep(400)
+
+        const nextIdx = currentItemIndex + 1
+        if (nextIdx < assessmentItems.length) {
+            showNextItem(nextIdx)
+        } else {
+            finishAssessment()
+        }
+    }
+
+    async function finishAssessment() {
+        const typingId = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
         try {
-            const response = await callAgent("/api/assessment/start", {
+            const result = await callAgent("/api/assessment/evaluate", {
                 session_id: sessionId,
                 zieljob: jobData.zieljob,
                 aktueller_job: jobData.aktuellerJob,
                 branche: jobData.branche,
-                researched_skills: skills,
-                varianz_antworten: vAntworten.length > 0 ? vAntworten : undefined,
-                diagnostik_strategy: diagnostikStrategy || undefined,
-            })
-            await processResponse(response)
+                job_beschreibung: jobBeschreibung,
+                researched_skills: researchResult?.skills || [],
+                varianz_antworten: varianzAntwortenRef.current.length > 0 ? varianzAntwortenRef.current : [],
+                diagnostik_strategy: diagnostikStrategy,
+                dimension_scores: {},
+                answers: [...assessmentAnswers],
+            }, 2)
+
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
+
+            if (result.messages) {
+                for (const msg of result.messages) {
+                    const tId = nextId()
+                    setBubbles(prev => [...prev, { kind: "typing", id: tId }])
+                    await sleep(msg.delay_ms)
+                    setBubbles(prev =>
+                        prev.filter(b => b.id !== tId).concat({ kind: "agent", text: msg.text, id: nextId() })
+                    )
+                }
+            }
+
+            if (result.dashboard) {
+                setBubbles(prev => [...prev, { kind: "dashboard" as const, data: result.dashboard, id: nextId() }])
+            }
         } catch (err: any) {
-            setError(`Agent-Verbindung fehlgeschlagen: ${err.message}`)
+            setBubbles(prev => prev.filter(b => b.id !== typingId))
+            setError(`Auswertung fehlgeschlagen: ${err.message}`)
         }
     }
 
@@ -687,6 +781,17 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     }
 
     async function handleStatementClick(optionId: string, optionText: string, statementNr: number) {
+        // Neuer Item-Flow: Items kommen vom Pool, nicht vom Agent
+        if (assessmentItems.length > 0) {
+            const currentItem = assessmentItems[currentItemIndex]
+            if (currentItem) {
+                const itemText = currentItem.text || currentItem.frage || ""
+                handleItemAnswer(currentItem.item_id, optionId, optionText, itemText)
+            }
+            return
+        }
+
+        // Legacy-Flow (falls noch gebraucht)
         if (answered) return
         setAnswered(true)
         const reactionTime = Date.now() - startTime
@@ -707,7 +812,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             await processResponse(response)
         } catch (err: any) {
             setBubbles(prev => prev.filter(b => b.id !== typingId))
-            // Retry-Button statt harter Fehler
             setBubbles(prev => [...prev, {
                 kind: "agent" as const,
                 text: `⚠️ Verbindungsproblem. Bitte versuche es nochmal.`,
