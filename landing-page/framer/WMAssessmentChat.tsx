@@ -93,8 +93,21 @@ type ChatBubble =
     | { kind: "dashboard"; data: Dashboard; id: string }
     | { kind: "varianz"; frage: VarianzFrage; index: number; id: string }
 
+// Clarify types
+type JobInterpretation = {
+    titel: string
+    beschreibung: string
+    suchbegriffe: string[]
+    kernaufgaben: string[]
+}
+type ClarifyResult = {
+    eindeutig: boolean
+    erkannt_als: string
+    interpretationen: JobInterpretation[]
+}
+
 // App phases
-type Phase = "research" | "varianz" | "assessment"
+type Phase = "clarify" | "research" | "varianz" | "assessment"
 
 type Props = {
     maxWidth?: number
@@ -143,7 +156,9 @@ const LOADING_MESSAGES = [
 
 export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const isMobile = useIsMobile()
-    const [phase, setPhase] = React.useState<Phase>("research")
+    const [phase, setPhase] = React.useState<Phase>("clarify")
+    const [clarifyResult, setClarifyResult] = React.useState<ClarifyResult | null>(null)
+    const [jobBeschreibung, setJobBeschreibung] = React.useState("")
     const [bubbles, setBubbles] = React.useState<ChatBubble[]>([])
     const [sessionId, setSessionId] = React.useState("")
     const [loading, setLoading] = React.useState(true)
@@ -237,11 +252,48 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
         // Pre-warm: Server aufwecken bevor der schwere Call kommt
         fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {})
-        // Start Skill Research
-        startResearch(zieljob, branche, aktuellerJob)
+        // Start mit Job-Klarifizierung
+        startClarify(zieljob, branche, aktuellerJob)
     }, [])
 
-    async function startResearch(zieljob: string, branche: string, aktuellerJob: string) {
+    // ─── Phase 0: Job Clarify ─────────────────────────────────
+
+    async function startClarify(zieljob: string, branche: string, aktuellerJob: string) {
+        try {
+            const result: ClarifyResult = await callAgent("/api/jobs/clarify", {
+                zieljob,
+                branche,
+                aktueller_job: aktuellerJob,
+            }, 2)
+
+            setClarifyResult(result)
+
+            if (result.eindeutig && result.interpretationen?.length === 1) {
+                // Eindeutig → direkt weiter zu Research
+                setJobBeschreibung(result.erkannt_als)
+                setPhase("research")
+                startResearch(zieljob, branche, aktuellerJob, result.erkannt_als)
+            } else {
+                // Mehrdeutig → User fragen
+                setPhase("clarify")
+                setLoading(false)
+            }
+        } catch (err: any) {
+            // Bei Fehler: direkt zu Research ohne Clarify
+            setPhase("research")
+            startResearch(zieljob, branche, aktuellerJob, "")
+        }
+    }
+
+    function handleClarifyChoice(interpretation: JobInterpretation) {
+        const beschreibung = `${interpretation.titel}: ${interpretation.beschreibung}`
+        setJobBeschreibung(beschreibung)
+        setLoading(true)
+        setPhase("research")
+        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
+    }
+
+    async function startResearch(zieljob: string, branche: string, aktuellerJob: string, jobBeschreibung: string = "") {
         // Animate loading messages
         let msgIndex = 0
         const msgInterval = setInterval(() => {
@@ -262,6 +314,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 zieljob,
                 branche,
                 aktueller_job: aktuellerJob,
+                job_beschreibung: jobBeschreibung,
             }, 3) // Mehr Retries für Skill Research (Cold Start)
 
             clearInterval(msgInterval)
@@ -685,6 +738,115 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         display: "flex",
         gap: 4,
         padding: "14px 20px",
+    }
+
+    // ─── Phase 0: Clarify Screen ───────────────────────────
+
+    if (phase === "clarify" && !loading && clarifyResult && !clarifyResult.eindeutig) {
+        return (
+            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                <div style={{
+                    padding: isMobile ? "24px 16px" : "40px 32px",
+                    maxWidth: 500,
+                    width: "100%",
+                }}>
+                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🎯</div>
+                    <div style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color: "#1f2937",
+                        marginBottom: 8,
+                        textAlign: "center",
+                    }}>
+                        Was genau meinst du?
+                    </div>
+                    <div style={{
+                        fontSize: 13,
+                        color: "#6b7280",
+                        marginBottom: 24,
+                        textAlign: "center",
+                    }}>
+                        „{jobData.zieljob}“ kann verschiedenes bedeuten.
+                        Wähle was am besten passt:
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {clarifyResult.interpretationen.map((interp, i) => (
+                            <button
+                                key={i}
+                                onClick={() => handleClarifyChoice(interp)}
+                                style={{
+                                    display: "block",
+                                    width: "100%",
+                                    padding: "16px 18px",
+                                    background: "#fff",
+                                    border: "2px solid #e5e7eb",
+                                    borderRadius: 16,
+                                    cursor: "pointer",
+                                    textAlign: "left",
+                                    transition: "all 0.2s",
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.borderColor = "#2563eb"
+                                    e.currentTarget.style.background = "#f0f5ff"
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.borderColor = "#e5e7eb"
+                                    e.currentTarget.style.background = "#fff"
+                                }}
+                            >
+                                <div style={{
+                                    fontSize: 15,
+                                    fontWeight: 600,
+                                    color: "#1f2937",
+                                    marginBottom: 4,
+                                }}>
+                                    {interp.titel}
+                                </div>
+                                <div style={{
+                                    fontSize: 13,
+                                    color: "#6b7280",
+                                    lineHeight: 1.4,
+                                }}>
+                                    {interp.beschreibung}
+                                </div>
+                                {interp.kernaufgaben && interp.kernaufgaben.length > 0 && (
+                                    <div style={{
+                                        display: "flex",
+                                        flexWrap: "wrap",
+                                        gap: 4,
+                                        marginTop: 8,
+                                    }}>
+                                        {interp.kernaufgaben.slice(0, 3).map((k, j) => (
+                                            <span key={j} style={{
+                                                fontSize: 11,
+                                                background: "#f1f5f9",
+                                                color: "#475569",
+                                                padding: "2px 8px",
+                                                borderRadius: 10,
+                                            }}>
+                                                {k}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    if (loading && phase === "clarify") {
+        return (
+            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                <div style={{ textAlign: "center", padding: 40 }}>
+                    <div style={{ fontSize: 48, marginBottom: 16, animation: "wmPulse 2s infinite ease-in-out" }}>🎯</div>
+                    <div style={{ fontSize: 15, color: "#6b7280" }}>Analysiere deinen Zieljob...</div>
+                </div>
+            </div>
+        )
     }
 
     // ─── Phase 1: Research Loading Screen ─────────────────────
