@@ -98,12 +98,10 @@ type JobInterpretation = {
     titel: string
     beschreibung: string
     suchbegriffe: string[]
-    kernaufgaben: string[]
 }
 type ClarifyResult = {
-    eindeutig: boolean
-    erkannt_als: string
-    interpretationen: JobInterpretation[]
+    hauptinterpretation: JobInterpretation
+    alternativen: JobInterpretation[]
 }
 
 // App phases
@@ -158,6 +156,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const isMobile = useIsMobile()
     const [phase, setPhase] = React.useState<Phase>("clarify")
     const [clarifyResult, setClarifyResult] = React.useState<ClarifyResult | null>(null)
+    const [clarifyRound, setClarifyRound] = React.useState<1 | 2>(1) // Runde 1: "Passt das?", Runde 2: Alternativen
     const [jobBeschreibung, setJobBeschreibung] = React.useState("")
     const [bubbles, setBubbles] = React.useState<ChatBubble[]>([])
     const [sessionId, setSessionId] = React.useState("")
@@ -267,30 +266,46 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             }, 2)
 
             setClarifyResult(result)
-
-            if (result.eindeutig && result.interpretationen?.length === 1) {
-                // Eindeutig → direkt weiter zu Research
-                setJobBeschreibung(result.erkannt_als)
-                setPhase("research")
-                startResearch(zieljob, branche, aktuellerJob, result.erkannt_als)
-            } else {
-                // Mehrdeutig → User fragen
-                setPhase("clarify")
-                setLoading(false)
-            }
+            setClarifyRound(1)
+            setPhase("clarify")
+            setLoading(false)
         } catch (err: any) {
             // Bei Fehler: direkt zu Research ohne Clarify
             setPhase("research")
+            setLoading(true)
             startResearch(zieljob, branche, aktuellerJob, "")
         }
     }
 
-    function handleClarifyChoice(interpretation: JobInterpretation) {
+    function handleClarifyConfirm() {
+        // User sagt "Ja, passt!" zur Hauptinterpretation
+        if (!clarifyResult) return
+        const interp = clarifyResult.hauptinterpretation
+        const beschreibung = `${interp.titel}: ${interp.beschreibung}`
+        setJobBeschreibung(beschreibung)
+        setLoading(true)
+        setPhase("research")
+        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
+    }
+
+    function handleClarifyReject() {
+        // User sagt "Nicht ganz" → Runde 2 mit Alternativen
+        setClarifyRound(2)
+    }
+
+    function handleClarifyAlternative(interpretation: JobInterpretation) {
         const beschreibung = `${interpretation.titel}: ${interpretation.beschreibung}`
         setJobBeschreibung(beschreibung)
         setLoading(true)
         setPhase("research")
         startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
+    }
+
+    function handleClarifyNoneMatch() {
+        // Nichts passt → zurück zur Landing Page
+        if (typeof window !== "undefined") {
+            window.location.href = "/"
+        }
     }
 
     async function startResearch(zieljob: string, branche: string, aktuellerJob: string, jobBeschreibung: string = "") {
@@ -742,7 +757,106 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
     // ─── Phase 0: Clarify Screen ───────────────────────────
 
-    if (phase === "clarify" && !loading && clarifyResult && !clarifyResult.eindeutig) {
+    if (phase === "clarify" && !loading && clarifyResult) {
+        const cardStyle: React.CSSProperties = {
+            display: "block",
+            width: "100%",
+            padding: "16px 18px",
+            background: "#fff",
+            border: "2px solid #e5e7eb",
+            borderRadius: 16,
+            cursor: "pointer",
+            textAlign: "left" as const,
+            transition: "all 0.2s",
+        }
+
+        // RUNDE 1: "Passt das?"
+        if (clarifyRound === 1) {
+            const haupt = clarifyResult.hauptinterpretation
+            return (
+                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                    <div style={{
+                        padding: isMobile ? "24px 16px" : "40px 32px",
+                        maxWidth: 500,
+                        width: "100%",
+                    }}>
+                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🎯</div>
+                        <div style={{
+                            fontSize: 18,
+                            fontWeight: 700,
+                            color: "#1f2937",
+                            marginBottom: 6,
+                            textAlign: "center",
+                        }}>
+                            {haupt.titel}
+                        </div>
+                        <div style={{
+                            fontSize: 14,
+                            color: "#4b5563",
+                            marginBottom: 28,
+                            textAlign: "center",
+                            lineHeight: 1.5,
+                            padding: "0 8px",
+                        }}>
+                            {haupt.beschreibung}
+                        </div>
+
+                        <div style={{
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: "#1f2937",
+                            marginBottom: 12,
+                            textAlign: "center",
+                        }}>
+                            Passt das?
+                        </div>
+
+                        <div style={{ display: "flex", gap: 12 }}>
+                            <button
+                                onClick={handleClarifyConfirm}
+                                style={{
+                                    flex: 1,
+                                    padding: "14px 20px",
+                                    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                                    color: "#fff",
+                                    border: "none",
+                                    borderRadius: 12,
+                                    fontSize: 15,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    transition: "transform 0.1s",
+                                }}
+                                onMouseDown={(e) => { e.currentTarget.style.transform = "scale(0.97)" }}
+                                onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)" }}
+                            >
+                                ✅ Ja, genau
+                            </button>
+                            <button
+                                onClick={handleClarifyReject}
+                                style={{
+                                    flex: 1,
+                                    padding: "14px 20px",
+                                    background: "#fff",
+                                    color: "#374151",
+                                    border: "2px solid #d1d5db",
+                                    borderRadius: 12,
+                                    fontSize: 15,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    transition: "all 0.1s",
+                                }}
+                                onMouseDown={(e) => { e.currentTarget.style.transform = "scale(0.97)" }}
+                                onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)" }}
+                            >
+                                Nicht ganz
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )
+        }
+
+        // RUNDE 2: Alternativen
         return (
             <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
                 <div style={{
@@ -750,7 +864,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     maxWidth: 500,
                     width: "100%",
                 }}>
-                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🎯</div>
+                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🤔</div>
                     <div style={{
                         fontSize: 18,
                         fontWeight: 700,
@@ -758,7 +872,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                         marginBottom: 8,
                         textAlign: "center",
                     }}>
-                        Was genau meinst du?
+                        Was passt besser?
                     </div>
                     <div style={{
                         fontSize: 13,
@@ -766,26 +880,15 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                         marginBottom: 24,
                         textAlign: "center",
                     }}>
-                        „{jobData.zieljob}“ kann verschiedenes bedeuten.
-                        Wähle was am besten passt:
+                        Wähle die Beschreibung die am nächsten dran ist:
                     </div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {clarifyResult.interpretationen.map((interp, i) => (
+                        {clarifyResult.alternativen.map((alt, i) => (
                             <button
                                 key={i}
-                                onClick={() => handleClarifyChoice(interp)}
-                                style={{
-                                    display: "block",
-                                    width: "100%",
-                                    padding: "16px 18px",
-                                    background: "#fff",
-                                    border: "2px solid #e5e7eb",
-                                    borderRadius: 16,
-                                    cursor: "pointer",
-                                    textAlign: "left",
-                                    transition: "all 0.2s",
-                                }}
+                                onClick={() => handleClarifyAlternative(alt)}
+                                style={cardStyle}
                                 onMouseEnter={(e) => {
                                     e.currentTarget.style.borderColor = "#2563eb"
                                     e.currentTarget.style.background = "#f0f5ff"
@@ -801,37 +904,43 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                                     color: "#1f2937",
                                     marginBottom: 4,
                                 }}>
-                                    {interp.titel}
+                                    {alt.titel}
                                 </div>
                                 <div style={{
                                     fontSize: 13,
                                     color: "#6b7280",
                                     lineHeight: 1.4,
                                 }}>
-                                    {interp.beschreibung}
+                                    {alt.beschreibung}
                                 </div>
-                                {interp.kernaufgaben && interp.kernaufgaben.length > 0 && (
-                                    <div style={{
-                                        display: "flex",
-                                        flexWrap: "wrap",
-                                        gap: 4,
-                                        marginTop: 8,
-                                    }}>
-                                        {interp.kernaufgaben.slice(0, 3).map((k, j) => (
-                                            <span key={j} style={{
-                                                fontSize: 11,
-                                                background: "#f1f5f9",
-                                                color: "#475569",
-                                                padding: "2px 8px",
-                                                borderRadius: 10,
-                                            }}>
-                                                {k}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
                             </button>
                         ))}
+
+                        {/* Nichts passt */}
+                        <button
+                            onClick={handleClarifyNoneMatch}
+                            style={{
+                                width: "100%",
+                                padding: "12px 16px",
+                                background: "transparent",
+                                border: "1px dashed #d1d5db",
+                                borderRadius: 12,
+                                fontSize: 13,
+                                color: "#9ca3af",
+                                cursor: "pointer",
+                                transition: "all 0.2s",
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = "#9ca3af"
+                                e.currentTarget.style.color = "#6b7280"
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = "#d1d5db"
+                                e.currentTarget.style.color = "#9ca3af"
+                            }}
+                        >
+                            Nichts davon — anderen Jobtitel versuchen
+                        </button>
                     </div>
                 </div>
             </div>
