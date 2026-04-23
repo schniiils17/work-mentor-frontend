@@ -471,7 +471,20 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         await sleep(800)
         const typingId2 = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId2 }])
-        await sleep(1200)
+
+        // Während der User die Animation sieht: Diagnostik-Strategie im Hintergrund laden
+        let diagnostikStrategy: Record<string, unknown> | null = null
+        try {
+            diagnostikStrategy = await callAgent("/api/skills/diagnostik", {
+                zieljob: jobData.zieljob,
+                branche: jobData.branche,
+                skills: (researchResult?.skills || []).map(s => ({ name: s.name, kategorie: s.kategorie })),
+                job_beschreibung: jobBeschreibung,
+            }, 1)
+        } catch (err) {
+            // Kein Fehler zeigen — Agent arbeitet ohne Strategie weiter
+        }
+
         setBubbles(prev => {
             const filtered = prev.filter(b => b.id !== typingId2)
             return [...filtered, {
@@ -487,14 +500,14 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         const typingId3 = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId3 }])
         // Verwende Ref statt State (synchron, immer aktuell)
-        await startAssessment(researchResult?.skills || [], varianzAntwortenRef.current)
+        await startAssessment(researchResult?.skills || [], varianzAntwortenRef.current, diagnostikStrategy)
         // Typing wird durch processResponse entfernt
         setBubbles(prev => prev.filter(b => b.id !== typingId3))
     }
 
     // ─── Phase 3: Assessment ──────────────────────────────────
 
-    async function startAssessment(skills: ResearchedSkill[], vAntworten: VarianzAntwort[]) {
+    async function startAssessment(skills: ResearchedSkill[], vAntworten: VarianzAntwort[], diagnostikStrategy?: Record<string, unknown> | null) {
         // Sicherstellen dass processingRef frei ist
         processingRef.current = false
 
@@ -506,6 +519,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 branche: jobData.branche,
                 researched_skills: skills,
                 varianz_antworten: vAntworten.length > 0 ? vAntworten : undefined,
+                diagnostik_strategy: diagnostikStrategy || undefined,
             })
             await processResponse(response)
         } catch (err: any) {
