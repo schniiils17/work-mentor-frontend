@@ -178,8 +178,11 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
 
     // Assessment items (fester Pool)
     const [assessmentItems, setAssessmentItems] = React.useState<any[]>([])
+    const assessmentItemsRef = React.useRef<any[]>([])
     const [currentItemIndex, setCurrentItemIndex] = React.useState(0)
+    const currentItemIndexRef = React.useRef(0)
     const [assessmentAnswers, setAssessmentAnswers] = React.useState<{item_id: string; antwort: string; item_text: string}[]>([])
+    const assessmentAnswersRef = React.useRef<{item_id: string; antwort: string; item_text: string}[]>([])
     const [diagnostikStrategy, setDiagnostikStrategy] = React.useState<Record<string, unknown> | null>(null)
 
     // Session data from sessionStorage
@@ -489,11 +492,15 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             }, 1)
         ])
 
-        // Items setzen
+        // Items holen
+        let items: any[] = []
         if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
-            setAssessmentItems(itemsResult.value.items)
+            items = itemsResult.value.items
+            setAssessmentItems(items)
             setCurrentItemIndex(0)
             setAssessmentAnswers([])
+            // Auch in Ref speichern für synchronen Zugriff
+            assessmentItemsRef.current = items
         } else {
             setError("Assessment konnte nicht geladen werden. Bitte lade die Seite neu.")
             return
@@ -530,20 +537,21 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         })
 
         await sleep(500)
-        // Erstes Item zeigen
-        showNextItem(0)
+        // Erstes Item direkt aus der lokalen Variable zeigen (State ist noch nicht aktualisiert!)
+        showNextItemDirect(0, items)
     }
 
     // ─── Phase 3: Assessment (feste Items) ────────────────────
 
-    function showNextItem(index: number) {
-        if (index >= assessmentItems.length) {
+    function showNextItemDirect(index: number, items: any[]) {
+        if (index >= items.length) {
             finishAssessment()
             return
         }
 
-        const item = assessmentItems[index]
+        const item = items[index]
         setCurrentItemIndex(index)
+        currentItemIndexRef.current = index
         setAnswered(false)
         setStartTime(Date.now())
 
@@ -562,20 +570,26 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
+    function showNextItem(index: number) {
+        showNextItemDirect(index, assessmentItemsRef.current)
+    }
+
     async function handleItemAnswer(itemId: string, optionId: string, optionText: string, itemText: string) {
         if (answered) return
         setAnswered(true)
 
         const newAnswer = { item_id: itemId, antwort: optionId, item_text: itemText }
         setAssessmentAnswers(prev => [...prev, newAnswer])
+        assessmentAnswersRef.current = [...assessmentAnswersRef.current, newAnswer]
 
         setBubbles(prev => [...prev, { kind: "user" as const, text: optionText, id: nextId() }])
 
         await sleep(400)
 
-        const nextIdx = currentItemIndex + 1
-        if (nextIdx < assessmentItems.length) {
-            showNextItem(nextIdx)
+        const nextIdx = currentItemIndexRef.current + 1
+        const items = assessmentItemsRef.current
+        if (nextIdx < items.length) {
+            showNextItemDirect(nextIdx, items)
         } else {
             finishAssessment()
         }
@@ -596,7 +610,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 varianz_antworten: varianzAntwortenRef.current.length > 0 ? varianzAntwortenRef.current : [],
                 diagnostik_strategy: diagnostikStrategy,
                 dimension_scores: {},
-                answers: [...assessmentAnswers],
+                answers: assessmentAnswersRef.current,
             }, 2)
 
             setBubbles(prev => prev.filter(b => b.id !== typingId))
