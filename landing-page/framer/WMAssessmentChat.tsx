@@ -89,6 +89,12 @@ let bubbleCounter = 0
 function nextId(): string { return `b_${++bubbleCounter}_${Date.now()}` }
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)) }
 
+// Score normalisieren: Backend liefert 0-100 ODER 0.0-1.0 — wir brauchen immer 0-100
+function normalizeScore(score: number): number {
+    if (score <= 1) return Math.round(score * 100)
+    return Math.round(score)
+}
+
 const LOADING_MESSAGES = [
     "Verbinde mit dem Arbeitsmarkt...",
     "Durchsuche Stellenanzeigen...",
@@ -197,22 +203,34 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }, 500)
 
         try {
-            const result: SkillResearchResult = await callAgent("/api/skills/research", {
-                zieljob,
-                branche: "",
-                aktueller_job: "",
-                job_beschreibung: "",
-            }, 3)
+            // Research + Items PARALLEL laden (spart 3-5 Sekunden)
+            const [researchRes, itemsRes] = await Promise.allSettled([
+                callAgent("/api/skills/research", {
+                    zieljob,
+                    branche: "",
+                    aktueller_job: "",
+                    job_beschreibung: "",
+                }, 3),
+                callAgent("/api/assessment/items", { session_id: getSid() }, 2),
+            ])
 
             clearInterval(msgInterval)
             clearInterval(progInterval)
             setLoadingProgress(100)
-            setResearchResult(result)
-            await sleep(600)
 
-            // Direkt zum Assessment — keine Varianz-Fragen
+            if (researchRes.status !== "fulfilled") throw new Error("Skill-Research fehlgeschlagen")
+            const result = researchRes.value as SkillResearchResult
+            setResearchResult(result)
+
+            // Items vormerken falls schon geladen
+            let preloadedItems: any[] | null = null
+            if (itemsRes.status === "fulfilled" && itemsRes.value?.items) {
+                preloadedItems = itemsRes.value.items
+            }
+
+            await sleep(400)
             setLoading(false)
-            await startAssessment(result, zieljob)
+            await startAssessment(result, zieljob, preloadedItems)
         } catch (err: any) {
             clearInterval(msgInterval)
             clearInterval(progInterval)
@@ -221,7 +239,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
-    async function startAssessment(research: SkillResearchResult, zieljob: string) {
+    async function startAssessment(research: SkillResearchResult, zieljob: string, preloadedItems: any[] | null = null) {
         // Intro: Was wir gefunden haben
         setBubbles([{ kind: "typing", id: nextId() }])
         await sleep(1200)
@@ -252,9 +270,12 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         const typingId = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
-        // Parallel: Items + Diagnostik laden
+        // Items: vorgeladen oder jetzt laden. Diagnostik parallel.
+        const needsItems = !preloadedItems
         const [itemsResult, diagResult] = await Promise.allSettled([
-            callAgent("/api/assessment/items", { session_id: sessionId }, 2),
+            needsItems
+                ? callAgent("/api/assessment/items", { session_id: sessionId }, 2)
+                : Promise.resolve({ items: preloadedItems }),
             callAgent("/api/skills/diagnostik", {
                 zieljob: zieljob,
                 branche: "",
@@ -264,7 +285,9 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         ])
 
         let items: any[] = []
-        if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
+        if (preloadedItems) {
+            items = preloadedItems
+        } else if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
             items = itemsResult.value.items
             setAssessmentItems(items)
             setCurrentItemIndex(0)
@@ -710,21 +733,17 @@ function DashboardCard({ d, isMobile }: { d: Dashboard; isMobile: boolean }) {
                     <div key={i} style={{ marginBottom: 16 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                             <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{dim.skill}</span>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: dim.score >= dim.zieljob_score ? "#059669" : "#d97706" }}>
-                                {Math.round(dim.score * 100)}%
+                            <span style={{ fontSize: 13, fontWeight: 700, color: normalizeScore(dim.score) >= 70 ? "#059669" : "#d97706" }}>
+                                {normalizeScore(dim.score)}%
                             </span>
                         </div>
                         <div style={{ height: 6, borderRadius: 99, background: "#f3f4f6", overflow: "hidden", position: "relative" }}>
                             <div style={{
-                                width: `${Math.round(dim.score * 100)}%`, height: "100%", borderRadius: 99,
-                                background: dim.score >= dim.zieljob_score
+                                width: `${normalizeScore(dim.score)}%`, height: "100%", borderRadius: 99,
+                                background: normalizeScore(dim.score) >= 70
                                     ? "linear-gradient(90deg, #22d3ee, #10b981)"
                                     : "linear-gradient(90deg, #fbbf24, #f59e0b)",
                                 transition: "width 0.5s",
-                            }} />
-                            <div style={{
-                                position: "absolute", top: -2, left: `${Math.round(dim.zieljob_score * 100)}%`,
-                                width: 2, height: 10, background: "#6b7280", borderRadius: 1,
                             }} />
                         </div>
                         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, lineHeight: 1.4 }}>{dim.insight}</div>
