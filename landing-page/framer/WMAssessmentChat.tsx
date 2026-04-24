@@ -1,9 +1,9 @@
 import * as React from "react"
 
 /**
- * WMAssessmentChat – Work Mentor Agent v2.1
- * Chat-basierte Assessment-Komponente für Framer.
- * NEU: Skill-Research + Varianz-Fragen VOR dem Assessment.
+ * WMAssessmentChat – Work Mentor Agent v3
+ * Verschlankter Flow: Research → Assessment Items → Dashboard
+ * Kein Clarify, keine Varianz, kein aktueller Job.
  *
  * @framerSupportedLayoutWidth any
  * @framerSupportedLayoutHeight any
@@ -15,10 +15,7 @@ const SID_STORAGE_KEY = "wm_session_id"
 
 // ─── Types ─────────────────────────────────────────────────────
 
-type AgentMessage = { text: string; delay_ms: number }
-type ButtonAction = { id: string; text: string }
 type Option = { id: string; text: string }
-type Meta = { optionen_ranking?: Record<string, number>; kontextfalle?: boolean; mapping?: Record<string, string> }
 
 type DashboardDimension = {
     skill: string
@@ -46,19 +43,6 @@ type Dashboard = {
     naechster_schritt?: string
 }
 
-type Progress = { current: number; estimated_total: number; phase: string }
-
-type AgentResponse =
-    | { typ: "agent_message"; messages: AgentMessage[]; action?: { typ: string; buttons: ButtonAction[] } }
-    | { typ: "statement"; statement_nr: number; text: string; optionen: Option[]; progress?: Progress; _meta: Meta }
-    | { typ: "forced_choice"; statement_nr: number; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
-    | { typ: "frage"; frage_nr: number; perspektive: string; skill: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
-    | { typ: "praeferenz"; frage_nr: number; perspektive: string; dimension: string; frage: string; optionen: Option[]; progress?: Progress; _meta: Meta }
-    | { typ: "magie_moment"; messages: AgentMessage[]; next: AgentResponse }
-    | { typ: "abschluss"; messages: AgentMessage[]; dashboard: Dashboard }
-    | { typ: "error"; code: string; message: string }
-
-// Skill Research Types
 type ResearchedSkill = {
     name: string
     kategorie: string
@@ -67,51 +51,21 @@ type ResearchedSkill = {
     varianz: string
     varianz_erklaerung: string
 }
-type VarianzOption = { text: string; skill_anpassung: string }
-type VarianzFrage = {
-    frage: string
-    grund: string
-    beeinflusst_skills: string[]
-    optionen: VarianzOption[]
-}
 type SkillResearchResult = {
     skills: ResearchedSkill[]
-    varianz_fragen: VarianzFrage[]
+    varianz_fragen: unknown[]
     meta: Record<string, unknown>
 }
-type VarianzAntwort = { frage: string; antwort: string; skill_anpassung: string }
 
-// Chat-Bubble types for rendering
 type ChatBubble =
     | { kind: "agent"; text: string; id: string }
     | { kind: "user"; text: string; id: string }
-    | { kind: "statement"; data: AgentResponse & { typ: "statement" }; id: string }
-    | { kind: "forced_choice"; data: AgentResponse & { typ: "forced_choice" }; id: string }
-    | { kind: "frage"; data: AgentResponse & { typ: "frage" | "praeferenz" }; id: string }
-    | { kind: "buttons"; buttons: ButtonAction[]; id: string }
+    | { kind: "statement"; data: any; id: string }
+    | { kind: "forced_choice"; data: any; id: string }
     | { kind: "typing"; id: string }
     | { kind: "dashboard"; data: Dashboard; id: string }
-    | { kind: "varianz"; frage: VarianzFrage; index: number; id: string }
 
-// Clarify types
-type JobInterpretation = {
-    titel: string
-    beschreibung: string
-    kernaufgaben?: string[]
-    suchbegriffe: string[]
-}
-type ClarifyResult = {
-    hauptinterpretation: JobInterpretation
-    zusatz_aufgaben?: string[]
-    alternativen: JobInterpretation[]
-}
-
-// App phases
-type Phase = "clarify" | "research" | "varianz" | "assessment"
-
-type Props = {
-    maxWidth?: number
-}
+type Props = { maxWidth?: number }
 
 // ─── Helpers ───────────────────────────────────────────────────
 
@@ -132,89 +86,63 @@ function getSid(): string {
 }
 
 let bubbleCounter = 0
-function nextId(): string {
-    return `b_${++bubbleCounter}_${Date.now()}`
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-// ─── Loading Messages ─────────────────────────────────────────
+function nextId(): string { return `b_${++bubbleCounter}_${Date.now()}` }
+function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)) }
 
 const LOADING_MESSAGES = [
     "Verbinde mit dem Arbeitsmarkt...",
     "Durchsuche Stellenanzeigen...",
     "Analysiere Anforderungsprofile...",
     "Vergleiche Skill-Muster...",
-    "Erkenne Varianz zwischen Positionen...",
-    "Das kann einen Moment dauern...",
     "Bereite dein Assessment vor...",
 ]
 
-// ─── Component ────────────────────────────────────────────────
+// ─── Component ─────────────────────────────────────────────────
 
 export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const isMobile = useIsMobile()
-    const [phase, setPhase] = React.useState<Phase>("clarify")
-    const [clarifyResult, setClarifyResult] = React.useState<ClarifyResult | null>(null)
-    const [clarifyRound, setClarifyRound] = React.useState<1 | 2 | 3>(1) // 1: "Passt das?", 2: "Richtung oder komplett anders?", 3: Feinjustierung/Alternativen
-    const [clarifyMode, setClarifyMode] = React.useState<"refine" | "alternatives" | null>(null)
-    const [selectedAufgaben, setSelectedAufgaben] = React.useState<Set<string>>(new Set())
-    const [jobBeschreibung, setJobBeschreibung] = React.useState("")
+
+    // State
     const [bubbles, setBubbles] = React.useState<ChatBubble[]>([])
     const [sessionId, setSessionId] = React.useState("")
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
-    const [frageNr, setFrageNr] = React.useState(0)
     const [answered, setAnswered] = React.useState(false)
     const [startTime, setStartTime] = React.useState(0)
-    const [progress, setProgress] = React.useState<Progress | null>(null)
-    const scrollRef = React.useRef<HTMLDivElement>(null)
-    const processingRef = React.useRef(false)
-
-    // Research state
-    const [researchResult, setResearchResult] = React.useState<SkillResearchResult | null>(null)
-    const [varianzAntworten, setVarianzAntworten] = React.useState<VarianzAntwort[]>([])
-    const [currentVarianzIndex, setCurrentVarianzIndex] = React.useState(0)
     const [loadingMsg, setLoadingMsg] = React.useState(LOADING_MESSAGES[0])
     const [loadingProgress, setLoadingProgress] = React.useState(0)
+    const scrollRef = React.useRef<HTMLDivElement>(null)
 
-    // Assessment items (fester Pool)
+    // Research + Assessment state
+    const [researchResult, setResearchResult] = React.useState<SkillResearchResult | null>(null)
     const [assessmentItems, setAssessmentItems] = React.useState<any[]>([])
     const assessmentItemsRef = React.useRef<any[]>([])
-    const [currentItemIndex, setCurrentItemIndex] = React.useState(0)
     const currentItemIndexRef = React.useRef(0)
-    const [assessmentAnswers, setAssessmentAnswers] = React.useState<{item_id: string; antwort: string; item_text: string}[]>([])
-    const assessmentAnswersRef = React.useRef<{item_id: string; antwort: string; item_text: string}[]>([])
+    const [currentItemIndex, setCurrentItemIndex] = React.useState(0)
+    const [assessmentAnswers, setAssessmentAnswers] = React.useState<{ item_id: string; antwort: string; item_text: string }[]>([])
+    const assessmentAnswersRef = React.useRef<{ item_id: string; antwort: string; item_text: string }[]>([])
     const [diagnostikStrategy, setDiagnostikStrategy] = React.useState<Record<string, unknown> | null>(null)
 
-    // Session data from sessionStorage
-    const [jobData, setJobData] = React.useState({ zieljob: "", aktuellerJob: "", branche: "" })
+    const [jobData, setJobData] = React.useState({ zieljob: "" })
 
     // Auto-scroll
     React.useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
-        }
+        if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
     }, [bubbles])
 
-    // Keep-Alive: Railway wach halten während der User auf der Seite ist
+    // Keep-Alive
     React.useEffect(() => {
-        const interval = setInterval(() => {
-            fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {})
-        }, 4 * 60 * 1000)
+        const interval = setInterval(() => { fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {}) }, 4 * 60 * 1000)
         return () => clearInterval(interval)
     }, [])
 
-    // ─── Agent API calls ───────────────────────────────────────
+    // ─── API Helper ────────────────────────────────────────────
 
     async function callAgent(endpoint: string, body: Record<string, unknown>, retries = 2): Promise<any> {
         for (let attempt = 0; attempt <= retries; attempt++) {
             try {
                 const controller = new AbortController()
-                const timeoutId = setTimeout(() => controller.abort(), 60000) // 60s Timeout (Railway Cold Start)
-
+                const timeoutId = setTimeout(() => controller.abort(), 60000)
                 const res = await fetch(`${AGENT_BASE_URL}${endpoint}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -222,149 +150,45 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     signal: controller.signal,
                 })
                 clearTimeout(timeoutId)
-
                 if (!res.ok) {
                     if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue }
                     throw new Error(`Agent error: ${res.status}`)
                 }
                 return res.json()
             } catch (err: any) {
-                if (err.name === "AbortError" || err.message?.includes("fetch")) {
-                    if (attempt < retries) { await sleep(1500 * (attempt + 1)); continue }
-                    throw new Error("Verbindung zum Agent hat zu lange gedauert. Bitte lade die Seite neu.")
-                }
-                if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue }
-                throw err
+                if (attempt < retries) { await sleep(1500 * (attempt + 1)); continue }
+                throw new Error("Verbindung zum Agent hat zu lange gedauert. Bitte lade die Seite neu.")
             }
         }
-        throw new Error("Agent nicht erreichbar.")
     }
 
-    // ─── Phase 1: Skill Research ──────────────────────────────
+    // ─── Init: Direkt Research starten ─────────────────────────
 
     React.useEffect(() => {
         const sid = getSid()
-        if (!sid) {
-            setLoading(false)
-            setError("Keine Session gefunden. Bitte starte von der Startseite.")
-            return
-        }
+        if (!sid) { setLoading(false); setError("Keine Session gefunden. Bitte starte von der Startseite."); return }
         setSessionId(sid)
 
-        const zieljob = sessionStorage.getItem("targetPosition") || ""
-        const aktuellerJob = sessionStorage.getItem("currentTitle") || ""
-        const branche = sessionStorage.getItem("industry") || ""
-        setJobData({ zieljob, aktuellerJob, branche })
+        const zieljob = (typeof window !== "undefined" ? sessionStorage.getItem("targetPosition") : "") || ""
+        setJobData({ zieljob })
 
-        if (!zieljob) {
-            setLoading(false)
-            setError("Kein Zieljob gefunden. Bitte starte von der Startseite.")
-            return
-        }
+        if (!zieljob) { setLoading(false); setError("Kein Zieljob gefunden. Bitte starte von der Startseite."); return }
 
-        // Pre-warm: Server aufwecken bevor der schwere Call kommt
+        // Pre-warm
         fetch(`${AGENT_BASE_URL}/api/health`).catch(() => {})
-        // Start mit Job-Klarifizierung
-        startClarify(zieljob, branche, aktuellerJob)
+        // Direkt Research starten — kein Clarify
+        startResearch(zieljob)
     }, [])
 
-    // ─── Phase 0: Job Clarify ─────────────────────────────────
+    // ─── Research → Assessment ─────────────────────────────────
 
-    async function startClarify(zieljob: string, branche: string, aktuellerJob: string) {
-        try {
-            const result: ClarifyResult = await callAgent("/api/jobs/clarify", {
-                zieljob,
-                branche,
-                aktueller_job: aktuellerJob,
-            }, 2)
-
-            setClarifyResult(result)
-            setClarifyRound(1)
-            setPhase("clarify")
-            setLoading(false)
-        } catch (err: any) {
-            // Bei Fehler: direkt zu Research ohne Clarify
-            setPhase("research")
-            setLoading(true)
-            startResearch(zieljob, branche, aktuellerJob, "")
-        }
-    }
-
-    function handleClarifyConfirm() {
-        // User sagt "Ja, passt!" zur Hauptinterpretation
-        if (!clarifyResult) return
-        const interp = clarifyResult.hauptinterpretation
-        const beschreibung = `${interp.titel}: ${interp.beschreibung}`
-        setJobBeschreibung(beschreibung)
-        setLoading(true)
-        setPhase("research")
-        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
-    }
-
-    function handleClarifyReject() {
-        // User sagt "Nicht ganz" → Runde 2: Was stimmt nicht?
-        setClarifyRound(2)
-    }
-
-    function handleClarifyRefine() {
-        // User sagt "Die Richtung stimmt" → Aufgaben an-/abwählen
-        setClarifyMode("refine")
-        setClarifyRound(3)
-        // Kernaufgaben vorauswählen
-        const kern = clarifyResult?.hauptinterpretation?.kernaufgaben || []
-        setSelectedAufgaben(new Set(kern))
-    }
-
-    function handleClarifyShowAlternatives() {
-        // User sagt "Komplett anderer Job" → Alternativen zeigen
-        setClarifyMode("alternatives")
-        setClarifyRound(3)
-    }
-
-    function toggleAufgabe(aufgabe: string) {
-        setSelectedAufgaben(prev => {
-            const next = new Set(prev)
-            if (next.has(aufgabe)) next.delete(aufgabe)
-            else next.add(aufgabe)
-            return next
-        })
-    }
-
-    function handleClarifyRefineConfirm() {
-        // User hat Aufgaben feinjustiert → weiter mit angepasster Beschreibung
-        const haupt = clarifyResult?.hauptinterpretation
-        const aufgaben = Array.from(selectedAufgaben)
-        const beschreibung = `${haupt?.titel}: ${haupt?.beschreibung} Kernaufgaben: ${aufgaben.join(", ")}`
-        setJobBeschreibung(beschreibung)
-        setLoading(true)
-        setPhase("research")
-        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
-    }
-
-    function handleClarifyAlternative(interpretation: JobInterpretation) {
-        const aufgaben = interpretation.kernaufgaben?.join(", ") || ""
-        const beschreibung = `${interpretation.titel}: ${interpretation.beschreibung}${aufgaben ? " Kernaufgaben: " + aufgaben : ""}`
-        setJobBeschreibung(beschreibung)
-        setLoading(true)
-        setPhase("research")
-        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
-    }
-
-    function handleClarifyNoneMatch() {
-        if (typeof window !== "undefined") {
-            window.location.href = "/"
-        }
-    }
-
-    async function startResearch(zieljob: string, branche: string, aktuellerJob: string, jobBeschreibung: string = "") {
-        // Animate loading messages
+    async function startResearch(zieljob: string) {
         let msgIndex = 0
         const msgInterval = setInterval(() => {
             msgIndex = (msgIndex + 1) % LOADING_MESSAGES.length
             setLoadingMsg(LOADING_MESSAGES[msgIndex])
         }, 2500)
 
-        // Animate progress bar
         let prog = 0
         const progInterval = setInterval(() => {
             prog += Math.random() * 8 + 2
@@ -375,30 +199,20 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         try {
             const result: SkillResearchResult = await callAgent("/api/skills/research", {
                 zieljob,
-                branche,
-                aktueller_job: aktuellerJob,
-                job_beschreibung: jobBeschreibung,
-            }, 3) // Mehr Retries für Skill Research (Cold Start)
+                branche: "",
+                aktueller_job: "",
+                job_beschreibung: "",
+            }, 3)
 
             clearInterval(msgInterval)
             clearInterval(progInterval)
             setLoadingProgress(100)
             setResearchResult(result)
-
             await sleep(600)
 
-            // Wenn Varianz-Fragen vorhanden → Phase varianz
-            if (result.varianz_fragen && result.varianz_fragen.length > 0) {
-                setPhase("varianz")
-                setLoading(false)
-                // Zeige erste Varianz-Frage als Chat
-                showVarianzIntro(result)
-            } else {
-                // Keine Varianz-Fragen → direkt zum Assessment
-                setPhase("assessment")
-                setLoading(false)
-                startAssessment(result.skills, [])
-            }
+            // Direkt zum Assessment — keine Varianz-Fragen
+            setLoading(false)
+            await startAssessment(result, zieljob)
         } catch (err: any) {
             clearInterval(msgInterval)
             clearInterval(progInterval)
@@ -407,186 +221,80 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
-    // ─── Phase 2: Varianz-Fragen ──────────────────────────────
-
-    async function showVarianzIntro(result: SkillResearchResult) {
-        const skillCount = result.skills.length
-        const meta = result.meta as any
-
-        // Agent intro messages
-        const introId1 = nextId()
-        setBubbles([{ kind: "typing", id: introId1 }])
+    async function startAssessment(research: SkillResearchResult, zieljob: string) {
+        // Intro: Was wir gefunden haben
+        setBubbles([{ kind: "typing", id: nextId() }])
         await sleep(1200)
+
+        const meta = research.meta as any
+        const skillCount = research.skills.length
         setBubbles([{
             kind: "agent",
-            text: `Ich hab ${meta?.stellenanzeigen_gefunden || skillCount} Stellenanzeigen analysiert und ${skillCount} relevante Skills gefunden.`,
+            text: `Ich hab mir angeschaut was "${zieljob}" braucht — ${meta?.stellenanzeigen_gefunden || skillCount} Stellenanzeigen analysiert, ${skillCount} relevante Skills gefunden.`,
             id: nextId()
         }])
 
-        await sleep(800)
-        const introId2 = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: introId2 }])
+        // Brücke: Warum die Fragen nichts mit Arbeit zu tun haben
+        await sleep(1200)
+        const bridgeTyping = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: bridgeTyping }])
         await sleep(1500)
         setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== introId2)
+            const filtered = prev.filter(b => b.id !== bridgeTyping)
             return [...filtered, {
                 kind: "agent",
-                text: "Aber bevor wir starten — ich muss ein paar Sachen wissen, weil die Stellenanzeigen sich bei manchen Punkten unterscheiden.",
-                id: nextId()
-            }]
-        })
-
-        await sleep(600)
-        // Zeige erste Varianz-Frage
-        showVarianzFrage(0, result.varianz_fragen)
-    }
-
-    function showVarianzFrage(index: number, fragen: VarianzFrage[]) {
-        if (index >= fragen.length) {
-            // Alle Varianz-Fragen beantwortet → Assessment starten
-            transitionToAssessment()
-            return
-        }
-
-        setCurrentVarianzIndex(index)
-        setBubbles(prev => [...prev, {
-            kind: "varianz",
-            frage: fragen[index],
-            index,
-            id: nextId()
-        }])
-    }
-
-    async function handleVarianzAnswer(frage: VarianzFrage, option: VarianzOption) {
-        const antwort: VarianzAntwort = {
-            frage: frage.frage,
-            antwort: option.text,
-            skill_anpassung: option.skill_anpassung,
-        }
-
-        // User-Antwort als Bubble
-        setBubbles(prev => [...prev, { kind: "user", text: option.text, id: nextId() }])
-
-        setVarianzAntworten(prev => {
-            const updated = [...prev, antwort]
-            varianzAntwortenRef.current = updated
-            return updated
-        })
-
-        await sleep(400)
-
-        // Nächste Varianz-Frage oder Assessment
-        const fragen = researchResult?.varianz_fragen || []
-        const nextIndex = currentVarianzIndex + 1
-
-        if (nextIndex < fragen.length) {
-            // Kurzer Agent-Kommentar
-            const typingId = nextId()
-            setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-            await sleep(900)
-            setBubbles(prev => {
-                const filtered = prev.filter(b => b.id !== typingId)
-                return [...filtered, {
-                    kind: "agent",
-                    text: "Gut, noch eine kurze Frage.",
-                    id: nextId()
-                }]
-            })
-            await sleep(400)
-            showVarianzFrage(nextIndex, fragen)
-        } else {
-            transitionToAssessment()
-        }
-    }
-
-    // Ref um varianzAntworten synchron zu tracken (React State ist async)
-    const varianzAntwortenRef = React.useRef<VarianzAntwort[]>([])
-
-    async function transitionToAssessment() {
-        // Typing-Animation: User merkt "hier passiert was"
-        const typingId1 = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId1 }])
-        await sleep(1500)
-        setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== typingId1)
-            return [...filtered, {
-                kind: "agent",
-                text: "Alles klar. Ich weiß jetzt genug über die Position.",
+                text: "Jetzt will ich herausfinden wie DU tickst — dann kann ich vergleichen. Die nächsten Fragen haben absichtlich nichts mit Arbeit zu tun. Antworte einfach ehrlich.",
                 id: nextId()
             }]
         })
 
         await sleep(800)
-        const typingId2 = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId2 }])
+        const typingId = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
-        // Parallel laden: Assessment Items + Diagnostik-Strategie
+        // Parallel: Items + Diagnostik laden
         const [itemsResult, diagResult] = await Promise.allSettled([
             callAgent("/api/assessment/items", { session_id: sessionId }, 2),
             callAgent("/api/skills/diagnostik", {
-                zieljob: jobData.zieljob,
-                branche: jobData.branche,
-                skills: (researchResult?.skills || []).map(s => ({ name: s.name, kategorie: s.kategorie })),
-                job_beschreibung: jobBeschreibung,
+                zieljob: zieljob,
+                branche: "",
+                skills: research.skills.map(s => ({ name: s.name, kategorie: s.kategorie })),
+                job_beschreibung: "",
             }, 1)
         ])
 
-        // Items holen
         let items: any[] = []
         if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
             items = itemsResult.value.items
             setAssessmentItems(items)
             setCurrentItemIndex(0)
             setAssessmentAnswers([])
-            // Auch in Ref speichern für synchronen Zugriff
             assessmentItemsRef.current = items
+            assessmentAnswersRef.current = []
         } else {
             setError("Assessment konnte nicht geladen werden. Bitte lade die Seite neu.")
             return
         }
 
-        // Diagnostik-Strategie speichern (optional)
-        if (diagResult.status === "fulfilled") {
-            setDiagnostikStrategy(diagResult.value)
-        }
+        if (diagResult.status === "fulfilled") setDiagnostikStrategy(diagResult.value)
 
         setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== typingId2)
+            const filtered = prev.filter(b => b.id !== typingId)
             return [...filtered, {
                 kind: "agent",
-                text: "Ich zeige dir jetzt ein paar Aussagen. Sag mir einfach ob sie auf dich zutreffen.",
+                text: "Es gibt kein richtig oder falsch. Los geht's!",
                 id: nextId()
             }]
         })
 
         await sleep(600)
-        setPhase("assessment")
-
-        // Intro-Nachrichten
-        const introTyping = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: introTyping }])
-        await sleep(1200)
-        setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== introTyping)
-            return [...filtered, {
-                kind: "agent",
-                text: "Antworte spontan — es gibt kein richtig oder falsch.",
-                id: nextId()
-            }]
-        })
-
-        await sleep(500)
-        // Erstes Item direkt aus der lokalen Variable zeigen (State ist noch nicht aktualisiert!)
-        showNextItemDirect(0, items)
+        showItem(0, items)
     }
 
-    // ─── Phase 3: Assessment (feste Items) ────────────────────
+    // ─── Assessment Items ──────────────────────────────────────
 
-    function showNextItemDirect(index: number, items: any[]) {
-        if (index >= items.length) {
-            finishAssessment()
-            return
-        }
+    function showItem(index: number, items: any[]) {
+        if (index >= items.length) { finishAssessment(); return }
 
         const item = items[index]
         setCurrentItemIndex(index)
@@ -595,22 +303,10 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         setStartTime(Date.now())
 
         if (item.typ === "statement") {
-            setBubbles(prev => [...prev, {
-                kind: "statement" as const,
-                data: item,
-                id: nextId()
-            }])
+            setBubbles(prev => [...prev, { kind: "statement", data: item, id: nextId() }])
         } else if (item.typ === "forced_choice") {
-            setBubbles(prev => [...prev, {
-                kind: "forced_choice" as const,
-                data: item,
-                id: nextId()
-            }])
+            setBubbles(prev => [...prev, { kind: "forced_choice", data: item, id: nextId() }])
         }
-    }
-
-    function showNextItem(index: number) {
-        showNextItemDirect(index, assessmentItemsRef.current)
     }
 
     async function handleItemAnswer(itemId: string, optionId: string, optionText: string, itemText: string) {
@@ -618,17 +314,15 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         setAnswered(true)
 
         const newAnswer = { item_id: itemId, antwort: optionId, item_text: itemText }
-        setAssessmentAnswers(prev => [...prev, newAnswer])
         assessmentAnswersRef.current = [...assessmentAnswersRef.current, newAnswer]
+        setAssessmentAnswers(prev => [...prev, newAnswer])
 
-        setBubbles(prev => [...prev, { kind: "user" as const, text: optionText, id: nextId() }])
-
+        setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
         await sleep(400)
 
         const nextIdx = currentItemIndexRef.current + 1
-        const items = assessmentItemsRef.current
-        if (nextIdx < items.length) {
-            showNextItemDirect(nextIdx, items)
+        if (nextIdx < assessmentItemsRef.current.length) {
+            showItem(nextIdx, assessmentItemsRef.current)
         } else {
             finishAssessment()
         }
@@ -642,11 +336,11 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             const result = await callAgent("/api/assessment/evaluate", {
                 session_id: sessionId,
                 zieljob: jobData.zieljob,
-                aktueller_job: jobData.aktuellerJob,
-                branche: jobData.branche,
-                job_beschreibung: jobBeschreibung,
+                aktueller_job: "",
+                branche: "",
+                job_beschreibung: "",
                 researched_skills: researchResult?.skills || [],
-                varianz_antworten: varianzAntwortenRef.current.length > 0 ? varianzAntwortenRef.current : [],
+                varianz_antworten: [],
                 diagnostik_strategy: diagnostikStrategy,
                 dimension_scores: {},
                 answers: assessmentAnswersRef.current,
@@ -659,14 +353,12 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                     const tId = nextId()
                     setBubbles(prev => [...prev, { kind: "typing", id: tId }])
                     await sleep(msg.delay_ms)
-                    setBubbles(prev =>
-                        prev.filter(b => b.id !== tId).concat({ kind: "agent", text: msg.text, id: nextId() })
-                    )
+                    setBubbles(prev => prev.filter(b => b.id !== tId).concat({ kind: "agent", text: msg.text, id: nextId() }))
                 }
             }
 
             if (result.dashboard) {
-                setBubbles(prev => [...prev, { kind: "dashboard" as const, data: result.dashboard, id: nextId() }])
+                setBubbles(prev => [...prev, { kind: "dashboard", data: result.dashboard, id: nextId() }])
             }
         } catch (err: any) {
             setBubbles(prev => prev.filter(b => b.id !== typingId))
@@ -674,967 +366,242 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
         }
     }
 
-    // ─── Process agent response ───────────────────────────────
-
-    async function processResponse(response: AgentResponse) {
-        if (processingRef.current) return
-        processingRef.current = true
-
-        try {
-            switch (response.typ) {
-                case "agent_message": {
-                    for (const msg of response.messages) {
-                        const typingId = nextId()
-                        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-                        await sleep(msg.delay_ms)
-                        setBubbles(prev =>
-                            prev.filter(b => b.id !== typingId).concat({ kind: "agent", text: msg.text, id: nextId() })
-                        )
-                    }
-                    if (response.action?.buttons) {
-                        setBubbles(prev => [...prev, { kind: "buttons", buttons: response.action!.buttons, id: nextId() }])
-                    } else if (phase === "assessment") {
-                        // Agent-Message OHNE Buttons während Assessment
-                        // = Übergangstext. Automatisch weiter zur nächsten Frage.
-                        await sleep(500)
-                        processingRef.current = false
-                        try {
-                            const next = await callAgent("/api/assessment/continue", {
-                                session_id: sessionId,
-                            })
-                            await processResponse(next)
-                            return
-                        } catch (err: any) {
-                            // Stille Fehler — User sieht den Übergangstext
-                        }
-                    }
-                    break
-                }
-
-                case "statement": {
-                    setAnswered(false)
-                    setStartTime(Date.now())
-                    if (response.progress) setProgress(response.progress as Progress)
-                    setBubbles(prev => [...prev, { kind: "statement", data: response as any, id: nextId() }])
-                    break
-                }
-
-                case "forced_choice": {
-                    setAnswered(false)
-                    setStartTime(Date.now())
-                    if (response.progress) setProgress(response.progress as Progress)
-                    setBubbles(prev => [...prev, { kind: "forced_choice", data: response as any, id: nextId() }])
-                    break
-                }
-
-                case "frage":
-                case "praeferenz": {
-                    setFrageNr(response.frage_nr)
-                    setAnswered(false)
-                    setStartTime(Date.now())
-                    if ('progress' in response && response.progress) {
-                        setProgress(response.progress as Progress)
-                    }
-                    setBubbles(prev => [...prev, { kind: "frage", data: response, id: nextId() }])
-                    break
-                }
-
-                case "magie_moment": {
-                    for (const msg of response.messages) {
-                        const typingId = nextId()
-                        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-                        await sleep(msg.delay_ms)
-                        setBubbles(prev =>
-                            prev.filter(b => b.id !== typingId).concat({ kind: "agent", text: msg.text, id: nextId() })
-                        )
-                    }
-                    if (response.next) {
-                        await sleep(800)
-                        processingRef.current = false
-                        await processResponse(response.next as AgentResponse)
-                        return
-                    }
-                    break
-                }
-
-                case "abschluss": {
-                    for (const msg of response.messages) {
-                        const typingId = nextId()
-                        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-                        await sleep(msg.delay_ms)
-                        setBubbles(prev =>
-                            prev.filter(b => b.id !== typingId).concat({ kind: "agent", text: msg.text, id: nextId() })
-                        )
-                    }
-                    await sleep(500)
-                    setBubbles(prev => [...prev, { kind: "dashboard", data: response.dashboard, id: nextId() }])
-                    break
-                }
-
-                case "error": {
-                    setError(response.message)
-                    break
-                }
-            }
-        } finally {
-            processingRef.current = false
-        }
-    }
-
-    // ─── Handle user actions ──────────────────────────────────
-
-    async function handleButtonClick(buttonId: string) {
-        setBubbles(prev => prev.filter(b => b.kind !== "buttons"))
-        setBubbles(prev => [...prev, { kind: "user", text: "Los geht's", id: nextId() }])
-
-        const typingId = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-
-        try {
-            const response = await callAgent("/api/assessment/answer", {
-                session_id: sessionId,
-                antwort: buttonId,
-            })
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            await processResponse(response)
-        } catch (err: any) {
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            setError(`Verbindung fehlgeschlagen. Bitte lade die Seite neu.`)
-        }
-    }
-
-    async function handleOptionClick(optionId: string, optionText: string) {
-        if (answered) return
-        setAnswered(true)
-        const reactionTime = Date.now() - startTime
-
-        setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
-
-        const typingId = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-
-        try {
-            const response = await callAgent("/api/assessment/answer", {
-                session_id: sessionId,
-                frage_nr: frageNr,
-                antwort: optionId,
-                reaction_time_ms: reactionTime,
-            })
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            await processResponse(response)
-        } catch (err: any) {
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            setBubbles(prev => [...prev, {
-                kind: "agent" as const,
-                text: `⚠️ Verbindungsproblem. Bitte versuche es nochmal.`,
-                id: nextId()
-            }])
-            setAnswered(false)
-        }
-    }
-
-    async function handleStatementClick(optionId: string, optionText: string, statementNr: number) {
-        // Neuer Item-Flow: Items kommen vom Pool, nicht vom Agent
-        if (assessmentItems.length > 0) {
-            const currentItem = assessmentItems[currentItemIndex]
-            if (currentItem) {
-                const itemText = currentItem.text || currentItem.frage || ""
-                handleItemAnswer(currentItem.item_id, optionId, optionText, itemText)
-            }
-            return
-        }
-
-        // Legacy-Flow (falls noch gebraucht)
-        if (answered) return
-        setAnswered(true)
-        const reactionTime = Date.now() - startTime
-
-        setBubbles(prev => [...prev, { kind: "user", text: optionText, id: nextId() }])
-
-        const typingId = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
-
-        try {
-            const response = await callAgent("/api/assessment/answer", {
-                session_id: sessionId,
-                frage_nr: statementNr,
-                antwort: optionId,
-                reaction_time_ms: reactionTime,
-            })
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            await processResponse(response)
-        } catch (err: any) {
-            setBubbles(prev => prev.filter(b => b.id !== typingId))
-            setBubbles(prev => [...prev, {
-                kind: "agent" as const,
-                text: `⚠️ Verbindungsproblem. Bitte versuche es nochmal.`,
-                id: nextId()
-            }])
-            setAnswered(false)
-        }
-    }
-
-    // ─── Styles ───────────────────────────────────────────────
+    // ─── Styles ────────────────────────────────────────────────
 
     const containerStyle: React.CSSProperties = {
-        width: "100%",
-        maxWidth,
-        margin: "0 auto",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: "#f8fafc",
+        width: "100%", maxWidth, margin: "0 auto", height: "100%",
+        display: "flex", flexDirection: "column", background: "#f8fafc",
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     }
-
     const chatAreaStyle: React.CSSProperties = {
-        flex: 1,
-        overflowY: "auto",
-        padding: isMobile ? "16px 12px" : "24px 20px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 12,
+        flex: 1, overflowY: "auto", padding: isMobile ? "16px 12px" : "24px 20px",
+        display: "flex", flexDirection: "column", gap: 12,
     }
-
     const agentBubbleStyle: React.CSSProperties = {
-        maxWidth: "85%",
-        padding: isMobile ? "12px 14px" : "14px 18px",
-        background: "#fff",
-        borderRadius: "18px 18px 18px 4px",
-        border: "1px solid #e5e7eb",
-        fontSize: isMobile ? 14 : 15,
-        lineHeight: 1.5,
-        color: "#1f2937",
-        alignSelf: "flex-start",
+        maxWidth: "85%", padding: isMobile ? "12px 14px" : "14px 18px",
+        background: "#fff", borderRadius: "18px 18px 18px 4px",
+        border: "1px solid #e5e7eb", fontSize: isMobile ? 14 : 15,
+        lineHeight: 1.5, color: "#1f2937", alignSelf: "flex-start",
     }
-
     const userBubbleStyle: React.CSSProperties = {
-        maxWidth: "75%",
-        padding: isMobile ? "10px 14px" : "12px 18px",
+        maxWidth: "75%", padding: isMobile ? "10px 14px" : "12px 18px",
         background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-        borderRadius: "18px 18px 4px 18px",
-        fontSize: isMobile ? 14 : 15,
-        lineHeight: 1.5,
-        color: "#fff",
-        alignSelf: "flex-end",
+        borderRadius: "18px 18px 4px 18px", fontSize: isMobile ? 14 : 15,
+        lineHeight: 1.5, color: "#fff", alignSelf: "flex-end",
     }
-
     const typingStyle: React.CSSProperties = {
-        ...agentBubbleStyle,
-        display: "flex",
-        gap: 4,
-        padding: "14px 20px",
+        ...agentBubbleStyle, display: "flex", gap: 4, padding: "14px 20px",
     }
 
-    // ─── Phase 0: Clarify Screen ───────────────────────────
-
-    if (phase === "clarify" && !loading && clarifyResult) {
-        const cardStyle: React.CSSProperties = {
-            display: "block",
-            width: "100%",
-            padding: "16px 18px",
-            background: "#fff",
-            border: "2px solid #e5e7eb",
-            borderRadius: 16,
-            cursor: "pointer",
-            textAlign: "left" as const,
-            transition: "all 0.2s",
-        }
-
-        const primaryBtnStyle: React.CSSProperties = {
-            flex: 1, padding: "14px 20px",
-            background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-            color: "#fff", border: "none", borderRadius: 12,
-            fontSize: 15, fontWeight: 600, cursor: "pointer",
-        }
-
-        const secondaryBtnStyle: React.CSSProperties = {
-            flex: 1, padding: "14px 20px",
-            background: "#fff", color: "#374151",
-            border: "2px solid #d1d5db", borderRadius: 12,
-            fontSize: 15, fontWeight: 600, cursor: "pointer",
-        }
-
-        // RUNDE 1: "Passt das?"
-        if (clarifyRound === 1) {
-            const haupt = clarifyResult.hauptinterpretation
-            return (
-                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
-                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🎯</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 6, textAlign: "center" }}>
-                            {haupt.titel}
-                        </div>
-                        <div style={{ fontSize: 14, color: "#4b5563", marginBottom: 16, textAlign: "center", lineHeight: 1.5, padding: "0 8px" }}>
-                            {haupt.beschreibung}
-                        </div>
-
-                        {haupt.kernaufgaben && haupt.kernaufgaben.length > 0 && (
-                            <div style={{ marginBottom: 24 }}>
-                                <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 8, textAlign: "center" }}>Kernaufgaben:</div>
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
-                                    {haupt.kernaufgaben.map((k, i) => (
-                                        <span key={i} style={{ fontSize: 12, background: "#f1f5f9", color: "#475569", padding: "4px 10px", borderRadius: 10 }}>{k}</span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937", marginBottom: 12, textAlign: "center" }}>Passt das?</div>
-                        <div style={{ display: "flex", gap: 12 }}>
-                            <button onClick={handleClarifyConfirm} style={primaryBtnStyle}>✅ Ja, genau</button>
-                            <button onClick={handleClarifyReject} style={secondaryBtnStyle}>Nicht ganz</button>
-                        </div>
-                    </div>
-                </div>
-            )
-        }
-
-        // RUNDE 2: "Was stimmt nicht?"
-        if (clarifyRound === 2) {
-            return (
-                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
-                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🤔</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was stimmt nicht?</div>
-                        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 24, textAlign: "center" }}>
-                            Geht es in die richtige Richtung, oder ist es ein komplett anderer Job?
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                            <button onClick={handleClarifyRefine} style={{ ...cardStyle, borderColor: "#2563eb", background: "#f0f5ff" }}>
-                                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>🔧 Die Richtung stimmt</div>
-                                <div style={{ fontSize: 13, color: "#6b7280" }}>Aber ein paar Aufgaben passen nicht ganz — lass mich das anpassen</div>
-                            </button>
-                            <button onClick={handleClarifyShowAlternatives} style={cardStyle}
-                                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb" }}
-                                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb" }}
-                            >
-                                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>🔄 Komplett anderer Job</div>
-                                <div style={{ fontSize: 13, color: "#6b7280" }}>Das ist nicht was ich meine — zeig mir andere Optionen</div>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )
-        }
-
-        // RUNDE 3a: Feinjustierung (Aufgaben an-/abwählen)
-        if (clarifyRound === 3 && clarifyMode === "refine") {
-            const allAufgaben = [
-                ...(clarifyResult.hauptinterpretation.kernaufgaben || []),
-                ...(clarifyResult.zusatz_aufgaben || [])
-            ]
-            return (
-                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
-                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🔧</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was gehört dazu?</div>
-                        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 20, textAlign: "center" }}>Wähle die Aufgaben die zu deiner Position gehören:</div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-                            {allAufgaben.map((aufgabe, i) => {
-                                const isSelected = selectedAufgaben.has(aufgabe)
-                                return (
-                                    <button key={i} onClick={() => toggleAufgabe(aufgabe)} style={{
-                                        display: "flex", alignItems: "center", gap: 10,
-                                        width: "100%", padding: "12px 14px", background: isSelected ? "#eff6ff" : "#fff",
-                                        border: `2px solid ${isSelected ? "#2563eb" : "#e5e7eb"}`,
-                                        borderRadius: 12, cursor: "pointer", textAlign: "left" as const, transition: "all 0.15s",
-                                    }}>
-                                        <span style={{ fontSize: 18 }}>{isSelected ? "✅" : "⬜"}</span>
-                                        <span style={{ fontSize: 14, color: "#1f2937" }}>{aufgabe}</span>
-                                    </button>
-                                )
-                            })}
-                        </div>
-                        <button onClick={handleClarifyRefineConfirm} style={{ ...primaryBtnStyle, width: "100%" }} disabled={selectedAufgaben.size === 0}>
-                            Weiter mit {selectedAufgaben.size} Aufgaben
-                        </button>
-                    </div>
-                </div>
-            )
-        }
-
-        // RUNDE 3b: Komplett andere Jobs
-        if (clarifyRound === 3 && clarifyMode === "alternatives") {
-            return (
-                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
-                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🔄</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was passt besser?</div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                            {clarifyResult.alternativen.map((alt, i) => (
-                                <button key={i} onClick={() => handleClarifyAlternative(alt)} style={cardStyle}
-                                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.background = "#f0f5ff" }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#fff" }}
-                                >
-                                    <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{alt.titel}</div>
-                                    <div style={{ fontSize: 13, color: "#6b7280", lineHeight: 1.4 }}>{alt.beschreibung}</div>
-                                    {alt.kernaufgaben && alt.kernaufgaben.length > 0 && (
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
-                                            {alt.kernaufgaben.slice(0, 3).map((k, j) => (
-                                                <span key={j} style={{ fontSize: 11, background: "#f1f5f9", color: "#475569", padding: "2px 8px", borderRadius: 10 }}>{k}</span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </button>
-                            ))}
-                            <button onClick={handleClarifyNoneMatch} style={{
-                                width: "100%", padding: "12px 16px", background: "transparent",
-                                border: "1px dashed #d1d5db", borderRadius: 12, fontSize: 13, color: "#9ca3af", cursor: "pointer",
-                            }}>Nichts davon — anderen Jobtitel versuchen</button>
-                        </div>
-                    </div>
-                </div>
-            )
-        }
-    }
-
-    if (loading && phase === "clarify") {
-        return (
-            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{ textAlign: "center", padding: 40 }}>
-                    <div style={{ fontSize: 48, marginBottom: 16, animation: "wmPulse 2s infinite ease-in-out" }}>🎯</div>
-                    <div style={{ fontSize: 15, color: "#6b7280" }}>Analysiere deinen Zieljob...</div>
-                </div>
-            </div>
-        )
-    }
-
-    // ─── Phase 1: Research Loading Screen ─────────────────────
-
-    if (loading && phase === "research") {
-        return (
-            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{
-                    textAlign: "center",
-                    padding: isMobile ? "24px 20px" : "40px 32px",
-                    maxWidth: 400,
-                }}>
-                    {/* Animated icon */}
-                    <div style={{
-                        fontSize: 48,
-                        marginBottom: 20,
-                        animation: "wmPulse 2s infinite ease-in-out",
-                    }}>
-                        🔍
-                    </div>
-
-                    {/* Title */}
-                    <div style={{
-                        fontSize: 18,
-                        fontWeight: 700,
-                        color: "#1f2937",
-                        marginBottom: 8,
-                    }}>
-                        Analysiere den Arbeitsmarkt
-                    </div>
-
-                    {/* Subtitle with job */}
-                    <div style={{
-                        fontSize: 13,
-                        color: "#6b7280",
-                        marginBottom: 24,
-                    }}>
-                        {jobData.zieljob} {jobData.branche ? `in ${jobData.branche}` : ""}
-                    </div>
-
-                    {/* Progress bar */}
-                    <div style={{
-                        width: "100%",
-                        height: 6,
-                        background: "#e5e7eb",
-                        borderRadius: 3,
-                        overflow: "hidden",
-                        marginBottom: 16,
-                    }}>
-                        <div style={{
-                            width: `${loadingProgress}%`,
-                            height: "100%",
-                            borderRadius: 3,
-                            background: "linear-gradient(90deg, #06b6d4, #2563eb)",
-                            transition: "width 0.5s ease",
-                        }} />
-                    </div>
-
-                    {/* Loading message */}
-                    <div style={{
-                        fontSize: 13,
-                        color: "#2563eb",
-                        fontWeight: 500,
-                        minHeight: 20,
-                        transition: "opacity 0.3s ease",
-                    }}>
-                        {loadingMsg}
-                    </div>
-                </div>
-
-                <style>{`
-                    @keyframes wmPulse {
-                        0%, 100% { transform: scale(1); }
-                        50% { transform: scale(1.1); }
-                    }
-                `}</style>
-            </div>
-        )
-    }
-
-    // ─── Error screen ─────────────────────────────────────────
-
-    if (error) {
-        return (
-            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{ textAlign: "center", padding: 24 }}>
-                    <div style={{ fontSize: 40, marginBottom: 16 }}>😕</div>
-                    <div style={{ fontSize: 15, color: "#b91c1c" }}>{error}</div>
-                </div>
-            </div>
-        )
-    }
-
-    // ─── Generic loading ──────────────────────────────────────
+    // ─── Loading Screen ────────────────────────────────────────
 
     if (loading) {
         return (
-            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 40, marginBottom: 16 }}>🤖</div>
-                    <div style={{ fontSize: 15, color: "#6b7280" }}>Agent wird verbunden...</div>
+            <div style={{
+                width: "100%", height: "100%", display: "flex",
+                alignItems: "center", justifyContent: "center",
+                background: "#f8fafc", padding: 20,
+            }}>
+                <div style={{
+                    maxWidth: 400, width: "100%", textAlign: "center",
+                    background: "#fff", borderRadius: 20, padding: "32px 24px",
+                    border: "1px solid #e5e7eb", boxShadow: "0 4px 24px rgba(0,0,0,0.06)",
+                }}>
+                    <div style={{
+                        width: 64, height: 64, borderRadius: "50%",
+                        background: "linear-gradient(135deg, #22d3ee, #10b981)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        margin: "0 auto 20px", animation: "pulse 2s infinite",
+                    }}>
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                    </div>
+                    <h2 style={{ fontSize: 20, fontWeight: 700, color: "#1f2937", margin: "0 0 8px" }}>
+                        {jobData.zieljob ? `Analysiere "${jobData.zieljob}"...` : "Wird vorbereitet..."}
+                    </h2>
+                    <p style={{ fontSize: 14, color: "#6b7280", margin: "0 0 20px", lineHeight: 1.5 }}>
+                        {loadingMsg}
+                    </p>
+                    <div style={{ width: "100%", height: 6, borderRadius: 99, background: "#e5e7eb", overflow: "hidden" }}>
+                        <div style={{
+                            width: `${loadingProgress}%`, height: "100%", borderRadius: 99,
+                            background: "linear-gradient(90deg, #22d3ee, #10b981)",
+                            transition: "width 0.3s ease",
+                        }} />
+                    </div>
+                    <div style={{ marginTop: 20, padding: 14, background: "#f0fdf4", borderRadius: 12 }}>
+                        <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+                            💡 <strong>Tipp:</strong> Es gibt keine richtigen oder falschen Antworten. Antworte so wie du wirklich tickst.
+                        </div>
+                    </div>
+                </div>
+                <style>{`@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }`}</style>
+            </div>
+        )
+    }
+
+    // ─── Error Screen ──────────────────────────────────────────
+
+    if (error) {
+        return (
+            <div style={{
+                width: "100%", height: "100%", display: "flex",
+                alignItems: "center", justifyContent: "center",
+                background: "#f8fafc", padding: 20,
+            }}>
+                <div style={{
+                    maxWidth: 400, width: "100%", textAlign: "center",
+                    background: "#fff", borderRadius: 20, padding: "32px 24px",
+                    border: "1px solid #fecaca",
+                }}>
+                    <h2 style={{ fontSize: 20, fontWeight: 700, color: "#b91c1c", margin: "0 0 8px" }}>Etwas ist schiefgelaufen</h2>
+                    <p style={{ fontSize: 14, color: "#7f1d1d", margin: "0 0 16px", lineHeight: 1.5 }}>{error}</p>
+                    <button onClick={() => { if (typeof window !== "undefined") window.location.href = "/" }} style={{
+                        padding: "12px 24px", borderRadius: 12, border: "none",
+                        background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+                    }}>
+                        Zurück zur Startseite
+                    </button>
                 </div>
             </div>
         )
     }
 
-    // ─── Main Chat UI ─────────────────────────────────────────
+    // ─── Chat Render ───────────────────────────────────────────
 
     return (
         <div style={containerStyle}>
             {/* Header */}
-            <div
-                style={{
-                    padding: isMobile ? "14px 16px" : "16px 20px",
-                    borderBottom: "1px solid #e5e7eb",
-                    background: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                }}
-            >
-                <div
-                    style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: "50%",
-                        background: "linear-gradient(135deg, #06b6d4, #2563eb)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: 18,
-                    }}
-                >
-                    🤖
+            <div style={{
+                padding: isMobile ? "14px 16px" : "16px 20px",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#fff",
+                display: "flex", alignItems: "center", gap: 10,
+            }}>
+                <div style={{
+                    width: 36, height: 36, borderRadius: "50%",
+                    background: "linear-gradient(135deg, #22d3ee, #10b981)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 16,
+                }}>
+                    🎯
                 </div>
-                <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937" }}>Work Mentor</div>
-                    <div style={{ fontSize: 11, color: "#10b981" }}>● Online</div>
+                <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#1f2937" }}>Work Mentor</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>{jobData.zieljob || "Assessment"}</div>
                 </div>
-                {/* Progress in header during assessment */}
-                {progress && (
-                    <div style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "4px 10px",
-                        background: "#f1f5f9",
-                        borderRadius: 16,
-                    }}>
-                        <div style={{ width: 40, height: 3, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
-                            <div style={{
-                                width: `${Math.round((progress.current / progress.estimated_total) * 100)}%`,
-                                height: "100%",
-                                background: "linear-gradient(90deg, #06b6d4, #2563eb)",
-                                transition: "width 0.3s ease",
-                            }} />
-                        </div>
-                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 500 }}>
-                            {progress.current}/{progress.estimated_total}
-                        </span>
-                    </div>
-                )}
             </div>
 
             {/* Chat Area */}
             <div ref={scrollRef} style={chatAreaStyle}>
-                {bubbles.map(bubble => {
+                {bubbles.map((bubble) => {
                     switch (bubble.kind) {
                         case "agent":
-                            return (
-                                <div key={bubble.id} style={agentBubbleStyle}>
-                                    {bubble.text}
-                                </div>
-                            )
+                            return <div key={bubble.id} style={agentBubbleStyle}>{bubble.text}</div>
 
                         case "user":
-                            return (
-                                <div key={bubble.id} style={userBubbleStyle}>
-                                    {bubble.text}
-                                </div>
-                            )
+                            return <div key={bubble.id} style={userBubbleStyle}>{bubble.text}</div>
 
                         case "typing":
                             return (
                                 <div key={bubble.id} style={typingStyle}>
                                     {[0, 1, 2].map(i => (
-                                        <div
-                                            key={i}
-                                            style={{
-                                                width: 8,
-                                                height: 8,
-                                                borderRadius: "50%",
-                                                background: "#9ca3af",
-                                                animation: `wmTypingDot 1.4s infinite ease-in-out both`,
-                                                animationDelay: `${i * 0.16}s`,
-                                            }}
-                                        />
+                                        <div key={i} style={{
+                                            width: 8, height: 8, borderRadius: "50%",
+                                            background: "#9ca3af",
+                                            animation: `typing-dot 1.4s ${i * 0.2}s infinite ease-in-out`,
+                                        }} />
                                     ))}
-                                </div>
-                            )
-
-                        case "buttons":
-                            return (
-                                <div key={bubble.id} style={{ display: "flex", gap: 8, alignSelf: "flex-start" }}>
-                                    {bubble.buttons.map(btn => (
-                                        <button
-                                            key={btn.id}
-                                            onClick={() => handleButtonClick(btn.id)}
-                                            style={{
-                                                padding: "10px 24px",
-                                                borderRadius: 24,
-                                                border: "none",
-                                                background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-                                                color: "#fff",
-                                                fontSize: 14,
-                                                fontWeight: 600,
-                                                cursor: "pointer",
-                                            }}
-                                        >
-                                            {btn.text}
-                                        </button>
-                                    ))}
+                                    <style>{`@keyframes typing-dot { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }`}</style>
                                 </div>
                             )
 
                         case "statement":
                             return (
-                                <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
-                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
-                                    <StatementCard
-                                        text={bubble.data.text}
-                                        optionen={bubble.data.optionen}
-                                        statementNr={(bubble.data as any).statement_nr}
-                                        isMobile={isMobile}
-                                        onAnswer={handleStatementClick}
-                                    />
-                                </div>
+                                <StatementBubble
+                                    key={bubble.id}
+                                    data={bubble.data}
+                                    isMobile={isMobile}
+                                    onAnswer={handleItemAnswer}
+                                    totalItems={assessmentItemsRef.current.length}
+                                />
                             )
 
                         case "forced_choice":
                             return (
-                                <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
-                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
-                                    <ForcedChoiceCard
-                                        frage={(bubble.data as any).frage}
-                                        optionen={bubble.data.optionen}
-                                        statementNr={(bubble.data as any).statement_nr}
-                                        isMobile={isMobile}
-                                        onAnswer={handleStatementClick}
-                                    />
-                                </div>
-                            )
-
-                        case "varianz":
-                            return (
-                                <VarianzCard
+                                <ForcedChoiceBubble
                                     key={bubble.id}
-                                    frage={bubble.frage}
+                                    data={bubble.data}
                                     isMobile={isMobile}
-                                    onAnswer={(option) => handleVarianzAnswer(bubble.frage, option)}
+                                    onAnswer={handleItemAnswer}
+                                    totalItems={assessmentItemsRef.current.length}
                                 />
                             )
 
-                        case "frage":
-                            return (
-                                <div key={bubble.id} style={{ alignSelf: "flex-start", width: "100%", maxWidth: "95%" }}>
-                                    {(bubble.data as any).progress && <ProgressPill progress={(bubble.data as any).progress} />}
-                                    {/* Question text as agent bubble */}
-                                    <div style={{ ...agentBubbleStyle, marginBottom: 10, maxWidth: "100%" }}>
-                                        {bubble.data.frage}
-                                    </div>
-                                    {/* Option cards */}
-                                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                        {bubble.data.optionen.map(opt => (
-                                            <button
-                                                key={opt.id}
-                                                onClick={() => handleOptionClick(opt.id, opt.text)}
-                                                disabled={answered}
-                                                style={{
-                                                    width: "100%",
-                                                    textAlign: "left",
-                                                    padding: isMobile ? "12px 14px" : "14px 18px",
-                                                    borderRadius: 12,
-                                                    border: "1px solid #e5e7eb",
-                                                    borderLeft: "4px solid #e5e7eb",
-                                                    background: "#fff",
-                                                    color: "#374151",
-                                                    fontSize: isMobile ? 14 : 15,
-                                                    lineHeight: 1.45,
-                                                    cursor: answered ? "default" : "pointer",
-                                                    opacity: answered ? 0.6 : 1,
-                                                    transition: "all 0.15s ease",
-                                                    boxSizing: "border-box",
-                                                }}
-                                                onMouseEnter={e => {
-                                                    if (!answered) {
-                                                        ;(e.target as HTMLButtonElement).style.borderLeftColor = "#2563eb"
-                                                        ;(e.target as HTMLButtonElement).style.background = "#f0f7ff"
-                                                    }
-                                                }}
-                                                onMouseLeave={e => {
-                                                    ;(e.target as HTMLButtonElement).style.borderLeftColor = "#e5e7eb"
-                                                    ;(e.target as HTMLButtonElement).style.background = "#fff"
-                                                }}
-                                            >
-                                                <span
-                                                    style={{
-                                                        display: "inline-block",
-                                                        width: 22,
-                                                        height: 22,
-                                                        lineHeight: "22px",
-                                                        textAlign: "center",
-                                                        borderRadius: 6,
-                                                        background: "#f1f5f9",
-                                                        color: "#64748b",
-                                                        fontSize: 12,
-                                                        fontWeight: 600,
-                                                        marginRight: 10,
-                                                        verticalAlign: "middle",
-                                                    }}
-                                                >
-                                                    {opt.id}
-                                                </span>
-                                                {opt.text}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )
-
                         case "dashboard":
-                            return <DashboardCard key={bubble.id} dashboard={bubble.data} isMobile={isMobile} />
+                            return <DashboardCard key={bubble.id} d={bubble.data} isMobile={isMobile} />
 
                         default:
                             return null
                     }
                 })}
             </div>
-
-            {/* CSS for animations */}
-            <style>{`
-                @keyframes wmTypingDot {
-                    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-                    40% { transform: scale(1); opacity: 1; }
-                }
-            `}</style>
         </div>
     )
 }
 
-// ─── Progress Pill ───────────────────────────────────────
+// ─── Statement Bubble ──────────────────────────────────────────
 
-function ProgressPill({ progress }: { progress: Progress }) {
-    const pct = Math.round((progress.current / progress.estimated_total) * 100)
-    const label = progress.phase === "statements" ? "Persönlichkeit" : progress.phase === "szenarien" ? "Verhalten" : ""
-    return (
-        <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginBottom: 10,
-            padding: "6px 14px",
-            background: "#f1f5f9",
-            borderRadius: 20,
-            width: "fit-content",
-        }}>
-            <div style={{ width: 60, height: 4, borderRadius: 2, background: "#e2e8f0", overflow: "hidden" }}>
-                <div style={{
-                    width: `${pct}%`,
-                    height: "100%",
-                    borderRadius: 2,
-                    background: "linear-gradient(90deg, #06b6d4, #2563eb)",
-                    transition: "width 0.3s ease",
-                }} />
-            </div>
-            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
-                {progress.current} von ~{progress.estimated_total}{label ? ` · ${label}` : ""}
-            </span>
-        </div>
-    )
-}
-
-// ─── Statement Card (Agree/Disagree) ─────────────────────────
-
-function StatementCard({
-    text,
-    optionen,
-    statementNr,
-    isMobile,
-    onAnswer
-}: {
-    text: string
-    optionen: Option[]
-    statementNr: number
-    isMobile: boolean
-    onAnswer: (optionId: string, optionText: string, nr: number) => void
+function StatementBubble({ data, isMobile, onAnswer, totalItems }: {
+    data: any; isMobile: boolean;
+    onAnswer: (itemId: string, optionId: string, optionText: string, itemText: string) => void;
+    totalItems: number;
 }) {
-    const [answered, setAnswered] = React.useState(false)
+    const [selected, setSelected] = React.useState<string | null>(null)
+    const progress = data.progress ? Math.round((data.progress.current / totalItems) * 100) : 0
 
     return (
         <div style={{
-            alignSelf: "flex-start",
-            width: "100%",
-            maxWidth: "95%",
+            maxWidth: "90%", alignSelf: "flex-start",
+            background: "#fff", borderRadius: 18, border: "1px solid #e5e7eb",
+            padding: isMobile ? "14px 16px" : "18px 20px", marginTop: 4,
         }}>
-            {/* Statement als Agent-Bubble */}
-            <div style={{
-                maxWidth: "85%",
-                padding: isMobile ? "14px 16px" : "16px 20px",
-                background: "#fff",
-                borderRadius: "18px 18px 18px 4px",
-                border: "1px solid #e5e7eb",
-                fontSize: isMobile ? 15 : 16,
-                lineHeight: 1.5,
-                color: "#1f2937",
-                fontStyle: "italic",
-                marginBottom: 12,
-            }}>
-                „{text}“
+            {/* Progress */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>
+                    {data.progress?.current} / {totalItems}
+                </span>
+                <div style={{ flex: 1, marginLeft: 10, height: 4, borderRadius: 99, background: "#f3f4f6", overflow: "hidden" }}>
+                    <div style={{ width: `${progress}%`, height: "100%", borderRadius: 99, background: "linear-gradient(90deg, #22d3ee, #10b981)", transition: "width 0.3s" }} />
+                </div>
             </div>
 
-            {/* Stimmt / Stimmt nicht Buttons */}
-            <div style={{ display: "flex", gap: 10 }}>
-                {optionen.map(opt => (
+            {/* Statement text */}
+            <p style={{ margin: "0 0 14px", fontSize: isMobile ? 15 : 16, fontWeight: 600, color: "#1f2937", lineHeight: 1.5 }}>
+                {data.text}
+            </p>
+
+            {/* Options */}
+            <div style={{ display: "flex", gap: 8 }}>
+                {data.optionen.map((opt: Option) => (
                     <button
                         key={opt.id}
                         onClick={() => {
-                            if (answered) return
-                            setAnswered(true)
-                            onAnswer(opt.id, opt.text, statementNr)
+                            if (selected) return
+                            setSelected(opt.id)
+                            onAnswer(data.item_id, opt.id, opt.text, data.text)
                         }}
-                        disabled={answered}
+                        disabled={!!selected}
                         style={{
-                            flex: 1,
-                            padding: isMobile ? "12px 16px" : "14px 20px",
-                            borderRadius: 14,
-                            border: "2px solid #e5e7eb",
-                            background: "#fff",
-                            color: "#374151",
-                            fontSize: isMobile ? 15 : 16,
-                            fontWeight: 600,
-                            cursor: answered ? "default" : "pointer",
-                            opacity: answered ? 0.5 : 1,
-                            transition: "all 0.2s ease",
-                        }}
-                        onMouseEnter={e => {
-                            if (!answered) {
-                                ;(e.target as HTMLButtonElement).style.borderColor = opt.id === "A" ? "#10b981" : "#ef4444"
-                                ;(e.target as HTMLButtonElement).style.background = opt.id === "A" ? "#f0fdf4" : "#fef2f2"
-                            }
-                        }}
-                        onMouseLeave={e => {
-                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
-                            ;(e.target as HTMLButtonElement).style.background = "#fff"
-                        }}
-                    >
-                        {opt.id === "A" ? "✓ " : "✗ "}{opt.text}
-                    </button>
-                ))}
-            </div>
-        </div>
-    )
-}
-
-// ─── Forced Choice Card ──────────────────────────────────
-
-function ForcedChoiceCard({
-    frage,
-    optionen,
-    statementNr,
-    isMobile,
-    onAnswer
-}: {
-    frage: string
-    optionen: Option[]
-    statementNr: number
-    isMobile: boolean
-    onAnswer: (optionId: string, optionText: string, nr: number) => void
-}) {
-    const [answered, setAnswered] = React.useState(false)
-
-    return (
-        <div style={{
-            alignSelf: "flex-start",
-            width: "100%",
-            maxWidth: "95%",
-        }}>
-            {/* Frage als Agent-Bubble */}
-            <div style={{
-                maxWidth: "85%",
-                padding: isMobile ? "12px 14px" : "14px 18px",
-                background: "#fff",
-                borderRadius: "18px 18px 18px 4px",
-                border: "1px solid #e5e7eb",
-                fontSize: isMobile ? 14 : 15,
-                lineHeight: 1.5,
-                color: "#1f2937",
-                marginBottom: 12,
-            }}>
-                {frage}
-            </div>
-
-            {/* Zwei Optionen als große Karten */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {optionen.map(opt => (
-                    <button
-                        key={opt.id}
-                        onClick={() => {
-                            if (answered) return
-                            setAnswered(true)
-                            onAnswer(opt.id, opt.text, statementNr)
-                        }}
-                        disabled={answered}
-                        style={{
-                            width: "100%",
-                            textAlign: "left",
-                            padding: isMobile ? "16px 18px" : "18px 22px",
-                            borderRadius: 14,
-                            border: "2px solid #e5e7eb",
-                            background: "#fff",
-                            color: "#374151",
-                            fontSize: isMobile ? 15 : 16,
-                            lineHeight: 1.5,
-                            cursor: answered ? "default" : "pointer",
-                            opacity: answered ? 0.5 : 1,
-                            transition: "all 0.2s ease",
-                            boxSizing: "border-box" as const,
-                        }}
-                        onMouseEnter={e => {
-                            if (!answered) {
-                                ;(e.target as HTMLButtonElement).style.borderColor = "#2563eb"
-                                ;(e.target as HTMLButtonElement).style.background = "#f0f7ff"
-                            }
-                        }}
-                        onMouseLeave={e => {
-                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
-                            ;(e.target as HTMLButtonElement).style.background = "#fff"
+                            flex: 1, padding: "12px 8px", borderRadius: 12,
+                            border: selected === opt.id ? "2px solid #2563eb" : "1px solid #e5e7eb",
+                            background: selected === opt.id ? "#eff6ff" : "#fff",
+                            color: selected === opt.id ? "#2563eb" : "#374151",
+                            fontSize: isMobile ? 13 : 14, fontWeight: 600,
+                            cursor: selected ? "default" : "pointer",
+                            opacity: selected && selected !== opt.id ? 0.4 : 1,
+                            transition: "all 0.15s",
                         }}
                     >
                         {opt.text}
@@ -1645,75 +612,57 @@ function ForcedChoiceCard({
     )
 }
 
-// ─── Varianz Card ────────────────────────────────────────────
+// ─── Forced Choice Bubble ──────────────────────────────────────
 
-function VarianzCard({
-    frage,
-    isMobile,
-    onAnswer
-}: {
-    frage: VarianzFrage
-    isMobile: boolean
-    onAnswer: (option: VarianzOption) => void
+function ForcedChoiceBubble({ data, isMobile, onAnswer, totalItems }: {
+    data: any; isMobile: boolean;
+    onAnswer: (itemId: string, optionId: string, optionText: string, itemText: string) => void;
+    totalItems: number;
 }) {
-    const [answered, setAnswered] = React.useState(false)
+    const [selected, setSelected] = React.useState<string | null>(null)
+    const progress = data.progress ? Math.round((data.progress.current / totalItems) * 100) : 0
 
     return (
         <div style={{
-            alignSelf: "flex-start",
-            width: "100%",
-            maxWidth: "95%",
+            maxWidth: "90%", alignSelf: "flex-start",
+            background: "#fff", borderRadius: 18, border: "1px solid #e5e7eb",
+            padding: isMobile ? "14px 16px" : "18px 20px", marginTop: 4,
         }}>
-            {/* Frage als Agent-Bubble */}
-            <div style={{
-                maxWidth: "85%",
-                padding: isMobile ? "12px 14px" : "14px 18px",
-                background: "#fff",
-                borderRadius: "18px 18px 18px 4px",
-                border: "1px solid #e5e7eb",
-                fontSize: isMobile ? 14 : 15,
-                lineHeight: 1.5,
-                color: "#1f2937",
-                marginBottom: 10,
-            }}>
-                {frage.frage}
+            {/* Progress */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>
+                    {data.progress?.current} / {totalItems}
+                </span>
+                <div style={{ flex: 1, marginLeft: 10, height: 4, borderRadius: 99, background: "#f3f4f6", overflow: "hidden" }}>
+                    <div style={{ width: `${progress}%`, height: "100%", borderRadius: 99, background: "linear-gradient(90deg, #22d3ee, #10b981)", transition: "width 0.3s" }} />
+                </div>
             </div>
 
-            {/* Optionen als große Karten */}
+            {/* Question */}
+            <p style={{ margin: "0 0 14px", fontSize: isMobile ? 14 : 15, fontWeight: 600, color: "#6b7280" }}>
+                {data.frage}
+            </p>
+
+            {/* Options */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {frage.optionen.map((opt, i) => (
+                {data.optionen.map((opt: Option) => (
                     <button
-                        key={i}
+                        key={opt.id}
                         onClick={() => {
-                            if (answered) return
-                            setAnswered(true)
-                            onAnswer(opt)
+                            if (selected) return
+                            setSelected(opt.id)
+                            onAnswer(data.item_id, opt.id, opt.text, data.frage)
                         }}
-                        disabled={answered}
+                        disabled={!!selected}
                         style={{
-                            width: "100%",
-                            textAlign: "left",
-                            padding: isMobile ? "14px 16px" : "16px 20px",
-                            borderRadius: 14,
-                            border: "2px solid #e5e7eb",
-                            background: "#fff",
-                            color: "#374151",
-                            fontSize: isMobile ? 14 : 15,
-                            lineHeight: 1.5,
-                            cursor: answered ? "default" : "pointer",
-                            opacity: answered ? 0.5 : 1,
-                            transition: "all 0.2s ease",
-                            boxSizing: "border-box",
-                        }}
-                        onMouseEnter={e => {
-                            if (!answered) {
-                                ;(e.target as HTMLButtonElement).style.borderColor = "#2563eb"
-                                ;(e.target as HTMLButtonElement).style.background = "#f0f7ff"
-                            }
-                        }}
-                        onMouseLeave={e => {
-                            ;(e.target as HTMLButtonElement).style.borderColor = "#e5e7eb"
-                            ;(e.target as HTMLButtonElement).style.background = "#fff"
+                            width: "100%", padding: "14px 16px", borderRadius: 12,
+                            border: selected === opt.id ? "2px solid #2563eb" : "1px solid #e5e7eb",
+                            background: selected === opt.id ? "#eff6ff" : "#fff",
+                            color: selected === opt.id ? "#2563eb" : "#374151",
+                            fontSize: isMobile ? 14 : 15, fontWeight: 500,
+                            textAlign: "left", cursor: selected ? "default" : "pointer",
+                            opacity: selected && selected !== opt.id ? 0.4 : 1,
+                            transition: "all 0.15s", lineHeight: 1.4,
                         }}
                     >
                         {opt.text}
@@ -1724,147 +673,97 @@ function VarianzCard({
     )
 }
 
-// ─── Dashboard Card ──────────────────────────────────────────
+// ─── Dashboard Card ────────────────────────────────────────────
 
-function DashboardCard({ dashboard, isMobile }: { dashboard: Dashboard; isMobile: boolean }) {
-    const d = dashboard
+function DashboardCard({ d, isMobile }: { d: Dashboard; isMobile: boolean }) {
+    const scoreColor = d.match_score >= 80 ? "#059669" : d.match_score >= 70 ? "#2563eb" : d.match_score >= 60 ? "#d97706" : "#dc2626"
 
     return (
-        <div
-            style={{
-                width: "100%",
-                background: "#fff",
-                borderRadius: 18,
-                border: "1px solid #e5e7eb",
-                boxShadow: "0 8px 30px rgba(0,0,0,0.06)",
-                overflow: "hidden",
-                alignSelf: "flex-start",
-            }}
-        >
-            {/* Match Score Header */}
-            <div
-                style={{
-                    padding: isMobile ? "24px 16px" : "32px 24px",
-                    background: "linear-gradient(135deg, #0f172a, #1e293b)",
-                    color: "#fff",
-                    textAlign: "center",
-                }}
-            >
-                <div style={{ fontSize: 48, fontWeight: 800 }}>{d.match_score}%</div>
-                <div style={{ fontSize: 14, color: "#94a3b8", marginTop: 4 }}>{d.match_label}</div>
+        <div style={{
+            width: "100%", maxWidth: 520, alignSelf: "center",
+            background: "#fff", borderRadius: 20,
+            border: "1px solid #e5e7eb", overflow: "hidden",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.08)", marginTop: 8,
+        }}>
+            {/* Header */}
+            <div style={{
+                background: "linear-gradient(135deg, #1e293b, #334155)",
+                padding: isMobile ? "24px 18px" : "32px 24px",
+                textAlign: "center", color: "#fff",
+            }}>
+                <div style={{
+                    width: 80, height: 80, borderRadius: "50%",
+                    border: `4px solid ${scoreColor}`, margin: "0 auto 12px",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 28, fontWeight: 800, color: scoreColor,
+                    background: "rgba(255,255,255,0.1)",
+                }}>
+                    {d.match_score}%
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{d.match_label}</div>
             </div>
 
-            <div style={{ padding: isMobile ? "16px" : "24px" }}>
-                {/* Skills */}
-                <h3 style={{ fontSize: 16, fontWeight: 700, color: "#1f2937", margin: "0 0 12px" }}>Deine Skills</h3>
-                {d.dimensions.map((dim, i) => (
+            {/* Body */}
+            <div style={{ padding: isMobile ? "18px 16px" : "24px 20px" }}>
+                {/* Dimensions */}
+                {d.dimensions?.map((dim, i) => (
                     <div key={i} style={{ marginBottom: 16 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                             <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{dim.skill}</span>
-                            <span
-                                style={{
-                                    fontSize: 11,
-                                    fontWeight: 600,
-                                    padding: "2px 8px",
-                                    borderRadius: 12,
-                                    background:
-                                        dim.bewertung === "Stärke" ? "#dcfce7"
-                                            : dim.bewertung === "Solide" ? "#dbeafe"
-                                                : dim.bewertung === "Entwicklungsfeld" ? "#fef3c7"
-                                                    : "#fee2e2",
-                                    color:
-                                        dim.bewertung === "Stärke" ? "#166534"
-                                            : dim.bewertung === "Solide" ? "#1e40af"
-                                                : dim.bewertung === "Entwicklungsfeld" ? "#92400e"
-                                                    : "#991b1b",
-                                }}
-                            >
-                                {dim.bewertung}
+                            <span style={{ fontSize: 13, fontWeight: 700, color: dim.score >= dim.zieljob_score ? "#059669" : "#d97706" }}>
+                                {Math.round(dim.score * 100)}%
                             </span>
                         </div>
-                        <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
-                            <div
-                                style={{
-                                    width: `${dim.score}%`,
-                                    height: "100%",
-                                    borderRadius: 3,
-                                    background:
-                                        dim.bewertung === "Stärke" ? "#22c55e"
-                                            : dim.bewertung === "Solide" ? "#3b82f6"
-                                                : dim.bewertung === "Entwicklungsfeld" ? "#f59e0b"
-                                                    : "#ef4444",
-                                }}
-                            />
+                        <div style={{ height: 6, borderRadius: 99, background: "#f3f4f6", overflow: "hidden", position: "relative" }}>
+                            <div style={{
+                                width: `${Math.round(dim.score * 100)}%`, height: "100%", borderRadius: 99,
+                                background: dim.score >= dim.zieljob_score
+                                    ? "linear-gradient(90deg, #22d3ee, #10b981)"
+                                    : "linear-gradient(90deg, #fbbf24, #f59e0b)",
+                                transition: "width 0.5s",
+                            }} />
+                            <div style={{
+                                position: "absolute", top: -2, left: `${Math.round(dim.zieljob_score * 100)}%`,
+                                width: 2, height: 10, background: "#6b7280", borderRadius: 1,
+                            }} />
                         </div>
-                        <p style={{ fontSize: 12, color: "#6b7280", margin: "4px 0 0", lineHeight: 1.4 }}>{dim.insight}</p>
+                        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, lineHeight: 1.4 }}>{dim.insight}</div>
                     </div>
                 ))}
 
                 {/* Stärken */}
-                {d.staerken.length > 0 && (
-                    <>
-                        <h3 style={{ fontSize: 16, fontWeight: 700, color: "#1f2937", margin: "20px 0 8px" }}>💪 Deine Stärken</h3>
+                {d.staerken?.length > 0 && (
+                    <div style={{ padding: 14, background: "#f0fdf4", borderRadius: 10, marginTop: 16, borderLeft: "3px solid #10b981" }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>💪 Deine Stärken</div>
                         {d.staerken.map((s, i) => (
-                            <div
-                                key={i}
-                                style={{
-                                    padding: 12,
-                                    background: "#f0fdf4",
-                                    borderRadius: 10,
-                                    marginBottom: 8,
-                                    borderLeft: "3px solid #22c55e",
-                                }}
-                            >
-                                <div style={{ fontSize: 13, fontWeight: 600, color: "#166534" }}>{s.skill}</div>
-                                <div style={{ fontSize: 12, color: "#374151", marginTop: 4 }}>{s.begruendung}</div>
+                            <div key={i} style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>
+                                <strong>{s.skill}:</strong> {s.begruendung}
                             </div>
                         ))}
-                    </>
+                    </div>
                 )}
 
                 {/* Hauptgap */}
-                <div
-                    style={{
-                        padding: 14,
-                        background: "#fffbeb",
-                        borderRadius: 10,
-                        marginTop: 16,
-                        borderLeft: "3px solid #f59e0b",
-                    }}
-                >
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>🎯 Dein größter Hebel: {d.hauptgap.skill}</div>
-                    <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>{d.hauptgap.hauptluecke}</div>
-                </div>
+                {d.hauptgap && (
+                    <div style={{ padding: 14, background: "#fff7ed", borderRadius: 10, marginTop: 12, borderLeft: "3px solid #f59e0b" }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#d97706" }}>🎯 Größter Hebel</div>
+                        <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>
+                            <strong>{d.hauptgap.skill}:</strong> {d.hauptgap.hauptluecke}
+                        </div>
+                    </div>
+                )}
 
                 {/* Bright vs Dark */}
-                {d.bright_vs_dark?.unterschied && (
-                    <div
-                        style={{
-                            padding: 14,
-                            background: "#f8fafc",
-                            borderRadius: 10,
-                            marginTop: 12,
-                            borderLeft: "3px solid #6366f1",
-                        }}
-                    >
+                {d.bright_vs_dark?.beschreibung && (
+                    <div style={{ padding: 14, background: "#eef2ff", borderRadius: 10, marginTop: 12, borderLeft: "3px solid #6366f1" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#4338ca" }}>🌗 Alltag vs. Druck</div>
-                        <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>
-                            {d.bright_vs_dark.beschreibung}
-                        </div>
+                        <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>{d.bright_vs_dark.beschreibung}</div>
                     </div>
                 )}
 
                 {/* Motive */}
                 {d.motive && (
-                    <div
-                        style={{
-                            padding: 14,
-                            background: "#faf5ff",
-                            borderRadius: 10,
-                            marginTop: 12,
-                            borderLeft: "3px solid #a855f7",
-                        }}
-                    >
+                    <div style={{ padding: 14, background: "#faf5ff", borderRadius: 10, marginTop: 12, borderLeft: "3px solid #a855f7" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#7e22ce" }}>💡 Was dich antreibt</div>
                         <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>{d.motive.profil}</div>
                     </div>
@@ -1884,37 +783,19 @@ function DashboardCard({ dashboard, isMobile }: { dashboard: Dashboard; isMobile
 
                 {/* Buchempfehlung */}
                 {d.buchempfehlung && (
-                    <div
-                        style={{
-                            marginTop: 20,
-                            padding: 16,
-                            background: "#eff6ff",
-                            borderRadius: 12,
-                            textAlign: "center",
-                        }}
-                    >
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>
-                            📚 Empfohlen für dich
-                        </div>
+                    <div style={{ marginTop: 20, padding: 16, background: "#eff6ff", borderRadius: 12, textAlign: "center" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>📚 Empfohlen für dich</div>
                         <div style={{ fontSize: 15, fontWeight: 700, color: "#1f2937" }}>{d.buchempfehlung.titel}</div>
                         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>von {d.buchempfehlung.autor}</div>
-                        <div style={{ fontSize: 12, color: "#374151", marginTop: 8, lineHeight: 1.5 }}>
-                            {d.buchempfehlung.begruendung}
-                        </div>
+                        <div style={{ fontSize: 12, color: "#374151", marginTop: 8, lineHeight: 1.5 }}>{d.buchempfehlung.begruendung}</div>
                         <a
                             href={`https://www.amazon.de/s?k=${encodeURIComponent(d.buchempfehlung.amazon_suchbegriff)}&tag=workmentor21-21`}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{
-                                display: "inline-block",
-                                marginTop: 12,
-                                padding: "10px 24px",
-                                background: "#f59e0b",
-                                color: "#fff",
-                                borderRadius: 24,
-                                fontSize: 13,
-                                fontWeight: 600,
-                                textDecoration: "none",
+                                display: "inline-block", marginTop: 12, padding: "10px 24px",
+                                background: "#f59e0b", color: "#fff", borderRadius: 24,
+                                fontSize: 13, fontWeight: 600, textDecoration: "none",
                             }}
                         >
                             Auf Amazon ansehen
