@@ -97,10 +97,12 @@ type ChatBubble =
 type JobInterpretation = {
     titel: string
     beschreibung: string
+    kernaufgaben?: string[]
     suchbegriffe: string[]
 }
 type ClarifyResult = {
     hauptinterpretation: JobInterpretation
+    zusatz_aufgaben?: string[]
     alternativen: JobInterpretation[]
 }
 
@@ -156,7 +158,9 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const isMobile = useIsMobile()
     const [phase, setPhase] = React.useState<Phase>("clarify")
     const [clarifyResult, setClarifyResult] = React.useState<ClarifyResult | null>(null)
-    const [clarifyRound, setClarifyRound] = React.useState<1 | 2>(1) // Runde 1: "Passt das?", Runde 2: Alternativen
+    const [clarifyRound, setClarifyRound] = React.useState<1 | 2 | 3>(1) // 1: "Passt das?", 2: "Richtung oder komplett anders?", 3: Feinjustierung/Alternativen
+    const [clarifyMode, setClarifyMode] = React.useState<"refine" | "alternatives" | null>(null)
+    const [selectedAufgaben, setSelectedAufgaben] = React.useState<Set<string>>(new Set())
     const [jobBeschreibung, setJobBeschreibung] = React.useState("")
     const [bubbles, setBubbles] = React.useState<ChatBubble[]>([])
     const [sessionId, setSessionId] = React.useState("")
@@ -298,12 +302,48 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     }
 
     function handleClarifyReject() {
-        // User sagt "Nicht ganz" → Runde 2 mit Alternativen
+        // User sagt "Nicht ganz" → Runde 2: Was stimmt nicht?
         setClarifyRound(2)
     }
 
+    function handleClarifyRefine() {
+        // User sagt "Die Richtung stimmt" → Aufgaben an-/abwählen
+        setClarifyMode("refine")
+        setClarifyRound(3)
+        // Kernaufgaben vorauswählen
+        const kern = clarifyResult?.hauptinterpretation?.kernaufgaben || []
+        setSelectedAufgaben(new Set(kern))
+    }
+
+    function handleClarifyShowAlternatives() {
+        // User sagt "Komplett anderer Job" → Alternativen zeigen
+        setClarifyMode("alternatives")
+        setClarifyRound(3)
+    }
+
+    function toggleAufgabe(aufgabe: string) {
+        setSelectedAufgaben(prev => {
+            const next = new Set(prev)
+            if (next.has(aufgabe)) next.delete(aufgabe)
+            else next.add(aufgabe)
+            return next
+        })
+    }
+
+    function handleClarifyRefineConfirm() {
+        // User hat Aufgaben feinjustiert → weiter mit angepasster Beschreibung
+        const haupt = clarifyResult?.hauptinterpretation
+        const aufgaben = Array.from(selectedAufgaben)
+        const beschreibung = `${haupt?.titel}: ${haupt?.beschreibung} Kernaufgaben: ${aufgaben.join(", ")}`
+        setJobBeschreibung(beschreibung)
+        setLoading(true)
+        setPhase("research")
+        startResearch(jobData.zieljob, jobData.branche, jobData.aktuellerJob, beschreibung)
+    }
+
     function handleClarifyAlternative(interpretation: JobInterpretation) {
-        const beschreibung = `${interpretation.titel}: ${interpretation.beschreibung}`
+        const aufgaben = interpretation.kernaufgaben?.join(", ") || ""
+        const beschreibung = `${interpretation.titel}: ${interpretation.beschreibung}${aufgaben ? " Kernaufgaben: " + aufgaben : ""}`
         setJobBeschreibung(beschreibung)
         setLoading(true)
         setPhase("research")
@@ -311,7 +351,6 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     }
 
     function handleClarifyNoneMatch() {
-        // Nichts passt → zurück zur Landing Page
         if (typeof window !== "undefined") {
             window.location.href = "/"
         }
@@ -902,85 +941,76 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             transition: "all 0.2s",
         }
 
+        const primaryBtnStyle: React.CSSProperties = {
+            flex: 1, padding: "14px 20px",
+            background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+            color: "#fff", border: "none", borderRadius: 12,
+            fontSize: 15, fontWeight: 600, cursor: "pointer",
+        }
+
+        const secondaryBtnStyle: React.CSSProperties = {
+            flex: 1, padding: "14px 20px",
+            background: "#fff", color: "#374151",
+            border: "2px solid #d1d5db", borderRadius: 12,
+            fontSize: 15, fontWeight: 600, cursor: "pointer",
+        }
+
         // RUNDE 1: "Passt das?"
         if (clarifyRound === 1) {
             const haupt = clarifyResult.hauptinterpretation
             return (
                 <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                    <div style={{
-                        padding: isMobile ? "24px 16px" : "40px 32px",
-                        maxWidth: 500,
-                        width: "100%",
-                    }}>
+                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
                         <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🎯</div>
-                        <div style={{
-                            fontSize: 18,
-                            fontWeight: 700,
-                            color: "#1f2937",
-                            marginBottom: 6,
-                            textAlign: "center",
-                        }}>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 6, textAlign: "center" }}>
                             {haupt.titel}
                         </div>
-                        <div style={{
-                            fontSize: 14,
-                            color: "#4b5563",
-                            marginBottom: 28,
-                            textAlign: "center",
-                            lineHeight: 1.5,
-                            padding: "0 8px",
-                        }}>
+                        <div style={{ fontSize: 14, color: "#4b5563", marginBottom: 16, textAlign: "center", lineHeight: 1.5, padding: "0 8px" }}>
                             {haupt.beschreibung}
                         </div>
 
-                        <div style={{
-                            fontSize: 14,
-                            fontWeight: 600,
-                            color: "#1f2937",
-                            marginBottom: 12,
-                            textAlign: "center",
-                        }}>
-                            Passt das?
-                        </div>
+                        {haupt.kernaufgaben && haupt.kernaufgaben.length > 0 && (
+                            <div style={{ marginBottom: 24 }}>
+                                <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 8, textAlign: "center" }}>Kernaufgaben:</div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+                                    {haupt.kernaufgaben.map((k, i) => (
+                                        <span key={i} style={{ fontSize: 12, background: "#f1f5f9", color: "#475569", padding: "4px 10px", borderRadius: 10 }}>{k}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
+                        <div style={{ fontSize: 14, fontWeight: 600, color: "#1f2937", marginBottom: 12, textAlign: "center" }}>Passt das?</div>
                         <div style={{ display: "flex", gap: 12 }}>
-                            <button
-                                onClick={handleClarifyConfirm}
-                                style={{
-                                    flex: 1,
-                                    padding: "14px 20px",
-                                    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-                                    color: "#fff",
-                                    border: "none",
-                                    borderRadius: 12,
-                                    fontSize: 15,
-                                    fontWeight: 600,
-                                    cursor: "pointer",
-                                    transition: "transform 0.1s",
-                                }}
-                                onMouseDown={(e) => { e.currentTarget.style.transform = "scale(0.97)" }}
-                                onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)" }}
-                            >
-                                ✅ Ja, genau
+                            <button onClick={handleClarifyConfirm} style={primaryBtnStyle}>✅ Ja, genau</button>
+                            <button onClick={handleClarifyReject} style={secondaryBtnStyle}>Nicht ganz</button>
+                        </div>
+                    </div>
+                </div>
+            )
+        }
+
+        // RUNDE 2: "Was stimmt nicht?"
+        if (clarifyRound === 2) {
+            return (
+                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
+                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🤔</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was stimmt nicht?</div>
+                        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 24, textAlign: "center" }}>
+                            Geht es in die richtige Richtung, oder ist es ein komplett anderer Job?
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                            <button onClick={handleClarifyRefine} style={{ ...cardStyle, borderColor: "#2563eb", background: "#f0f5ff" }}>
+                                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>🔧 Die Richtung stimmt</div>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Aber ein paar Aufgaben passen nicht ganz — lass mich das anpassen</div>
                             </button>
-                            <button
-                                onClick={handleClarifyReject}
-                                style={{
-                                    flex: 1,
-                                    padding: "14px 20px",
-                                    background: "#fff",
-                                    color: "#374151",
-                                    border: "2px solid #d1d5db",
-                                    borderRadius: 12,
-                                    fontSize: 15,
-                                    fontWeight: 600,
-                                    cursor: "pointer",
-                                    transition: "all 0.1s",
-                                }}
-                                onMouseDown={(e) => { e.currentTarget.style.transform = "scale(0.97)" }}
-                                onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)" }}
+                            <button onClick={handleClarifyShowAlternatives} style={cardStyle}
+                                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb" }}
+                                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb" }}
                             >
-                                Nicht ganz
+                                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>🔄 Komplett anderer Job</div>
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>Das ist nicht was ich meine — zeig mir andere Optionen</div>
                             </button>
                         </div>
                     </div>
@@ -988,95 +1018,75 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             )
         }
 
-        // RUNDE 2: Alternativen
-        return (
-            <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
-                <div style={{
-                    padding: isMobile ? "24px 16px" : "40px 32px",
-                    maxWidth: 500,
-                    width: "100%",
-                }}>
-                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🤔</div>
-                    <div style={{
-                        fontSize: 18,
-                        fontWeight: 700,
-                        color: "#1f2937",
-                        marginBottom: 8,
-                        textAlign: "center",
-                    }}>
-                        Was passt besser?
-                    </div>
-                    <div style={{
-                        fontSize: 13,
-                        color: "#6b7280",
-                        marginBottom: 24,
-                        textAlign: "center",
-                    }}>
-                        Wähle die Beschreibung die am nächsten dran ist:
-                    </div>
-
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {clarifyResult.alternativen.map((alt, i) => (
-                            <button
-                                key={i}
-                                onClick={() => handleClarifyAlternative(alt)}
-                                style={cardStyle}
-                                onMouseEnter={(e) => {
-                                    e.currentTarget.style.borderColor = "#2563eb"
-                                    e.currentTarget.style.background = "#f0f5ff"
-                                }}
-                                onMouseLeave={(e) => {
-                                    e.currentTarget.style.borderColor = "#e5e7eb"
-                                    e.currentTarget.style.background = "#fff"
-                                }}
-                            >
-                                <div style={{
-                                    fontSize: 15,
-                                    fontWeight: 600,
-                                    color: "#1f2937",
-                                    marginBottom: 4,
-                                }}>
-                                    {alt.titel}
-                                </div>
-                                <div style={{
-                                    fontSize: 13,
-                                    color: "#6b7280",
-                                    lineHeight: 1.4,
-                                }}>
-                                    {alt.beschreibung}
-                                </div>
-                            </button>
-                        ))}
-
-                        {/* Nichts passt */}
-                        <button
-                            onClick={handleClarifyNoneMatch}
-                            style={{
-                                width: "100%",
-                                padding: "12px 16px",
-                                background: "transparent",
-                                border: "1px dashed #d1d5db",
-                                borderRadius: 12,
-                                fontSize: 13,
-                                color: "#9ca3af",
-                                cursor: "pointer",
-                                transition: "all 0.2s",
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.borderColor = "#9ca3af"
-                                e.currentTarget.style.color = "#6b7280"
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.borderColor = "#d1d5db"
-                                e.currentTarget.style.color = "#9ca3af"
-                            }}
-                        >
-                            Nichts davon — anderen Jobtitel versuchen
+        // RUNDE 3a: Feinjustierung (Aufgaben an-/abwählen)
+        if (clarifyRound === 3 && clarifyMode === "refine") {
+            const allAufgaben = [
+                ...(clarifyResult.hauptinterpretation.kernaufgaben || []),
+                ...(clarifyResult.zusatz_aufgaben || [])
+            ]
+            return (
+                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
+                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🔧</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was gehört dazu?</div>
+                        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 20, textAlign: "center" }}>Wähle die Aufgaben die zu deiner Position gehören:</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                            {allAufgaben.map((aufgabe, i) => {
+                                const isSelected = selectedAufgaben.has(aufgabe)
+                                return (
+                                    <button key={i} onClick={() => toggleAufgabe(aufgabe)} style={{
+                                        display: "flex", alignItems: "center", gap: 10,
+                                        width: "100%", padding: "12px 14px", background: isSelected ? "#eff6ff" : "#fff",
+                                        border: `2px solid ${isSelected ? "#2563eb" : "#e5e7eb"}`,
+                                        borderRadius: 12, cursor: "pointer", textAlign: "left" as const, transition: "all 0.15s",
+                                    }}>
+                                        <span style={{ fontSize: 18 }}>{isSelected ? "✅" : "⬜"}</span>
+                                        <span style={{ fontSize: 14, color: "#1f2937" }}>{aufgabe}</span>
+                                    </button>
+                                )
+                            })}
+                        </div>
+                        <button onClick={handleClarifyRefineConfirm} style={{ ...primaryBtnStyle, width: "100%" }} disabled={selectedAufgaben.size === 0}>
+                            Weiter mit {selectedAufgaben.size} Aufgaben
                         </button>
                     </div>
                 </div>
-            </div>
-        )
+            )
+        }
+
+        // RUNDE 3b: Komplett andere Jobs
+        if (clarifyRound === 3 && clarifyMode === "alternatives") {
+            return (
+                <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ padding: isMobile ? "24px 16px" : "40px 32px", maxWidth: 500, width: "100%" }}>
+                        <div style={{ fontSize: 28, marginBottom: 12, textAlign: "center" }}>🔄</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: "#1f2937", marginBottom: 8, textAlign: "center" }}>Was passt besser?</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                            {clarifyResult.alternativen.map((alt, i) => (
+                                <button key={i} onClick={() => handleClarifyAlternative(alt)} style={cardStyle}
+                                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.background = "#f0f5ff" }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#fff" }}
+                                >
+                                    <div style={{ fontSize: 15, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{alt.titel}</div>
+                                    <div style={{ fontSize: 13, color: "#6b7280", lineHeight: 1.4 }}>{alt.beschreibung}</div>
+                                    {alt.kernaufgaben && alt.kernaufgaben.length > 0 && (
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+                                            {alt.kernaufgaben.slice(0, 3).map((k, j) => (
+                                                <span key={j} style={{ fontSize: 11, background: "#f1f5f9", color: "#475569", padding: "2px 8px", borderRadius: 10 }}>{k}</span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </button>
+                            ))}
+                            <button onClick={handleClarifyNoneMatch} style={{
+                                width: "100%", padding: "12px 16px", background: "transparent",
+                                border: "1px dashed #d1d5db", borderRadius: 12, fontSize: 13, color: "#9ca3af", cursor: "pointer",
+                            }}>Nichts davon — anderen Jobtitel versuchen</button>
+                        </div>
+                    </div>
+                </div>
+            )
+        }
     }
 
     if (loading && phase === "clarify") {
