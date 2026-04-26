@@ -715,8 +715,19 @@ function ForcedChoiceBubble({ data, isMobile, onAnswer, totalItems }: {
 
 // ─── Dashboard Card ────────────────────────────────────────────
 
-function DashboardCard({ d, isMobile }: { d: Dashboard; isMobile: boolean }) {
+function DashboardCard({ d, isMobile }: { d: any; isMobile: boolean }) {
     const scoreColor = d.match_score >= 80 ? "#059669" : d.match_score >= 70 ? "#2563eb" : d.match_score >= 60 ? "#d97706" : "#dc2626"
+
+    // Bewertung → Farbe
+    const bewertungColor = (b: string) => {
+        if (!b) return "#d97706"
+        const lower = b.toLowerCase()
+        if (lower.includes("stark")) return "#059669"
+        if (lower.includes("solide")) return "#2563eb"
+        if (lower.includes("entwicklung")) return "#d97706"
+        if (lower.includes("lücke")) return "#dc2626"
+        return "#6b7280"
+    }
 
     return (
         <div style={{
@@ -746,34 +757,48 @@ function DashboardCard({ d, isMobile }: { d: Dashboard; isMobile: boolean }) {
             {/* Body */}
             <div style={{ padding: isMobile ? "18px 16px" : "24px 20px" }}>
                 {/* Dimensions */}
-                {d.dimensions?.map((dim, i) => (
-                    <div key={i} style={{ marginBottom: 16 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{dim.skill}</span>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: normalizeScore(dim.score) >= 70 ? "#059669" : "#d97706" }}>
-                                {normalizeScore(dim.score)}%
-                            </span>
+                {d.dimensions?.map((dim: any, i: number) => {
+                    // Kompatibel mit altem (skill/score) UND neuem Format (label/user_score)
+                    const label = dim.label || dim.skill || "?"
+                    const score = normalizeScore(dim.user_score ?? dim.score ?? 50)
+                    const color = bewertungColor(dim.bewertung)
+
+                    return (
+                        <div key={i} style={{ marginBottom: 16 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{label}</span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    {dim.bewertung && (
+                                        <span style={{ fontSize: 10, fontWeight: 600, color, background: `${color}15`, padding: "2px 6px", borderRadius: 6 }}>
+                                            {dim.bewertung}
+                                        </span>
+                                    )}
+                                    <span style={{ fontSize: 13, fontWeight: 700, color: score >= 70 ? "#059669" : "#d97706" }}>
+                                        {score}%
+                                    </span>
+                                </div>
+                            </div>
+                            <div style={{ height: 6, borderRadius: 99, background: "#f3f4f6", overflow: "hidden" }}>
+                                <div style={{
+                                    width: `${score}%`, height: "100%", borderRadius: 99,
+                                    background: score >= 70
+                                        ? "linear-gradient(90deg, #22d3ee, #10b981)"
+                                        : "linear-gradient(90deg, #fbbf24, #f59e0b)",
+                                    transition: "width 0.5s",
+                                }} />
+                            </div>
+                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, lineHeight: 1.4 }}>{dim.insight}</div>
                         </div>
-                        <div style={{ height: 6, borderRadius: 99, background: "#f3f4f6", overflow: "hidden", position: "relative" }}>
-                            <div style={{
-                                width: `${normalizeScore(dim.score)}%`, height: "100%", borderRadius: 99,
-                                background: normalizeScore(dim.score) >= 70
-                                    ? "linear-gradient(90deg, #22d3ee, #10b981)"
-                                    : "linear-gradient(90deg, #fbbf24, #f59e0b)",
-                                transition: "width 0.5s",
-                            }} />
-                        </div>
-                        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, lineHeight: 1.4 }}>{dim.insight}</div>
-                    </div>
-                ))}
+                    )
+                })}
 
                 {/* Stärken */}
                 {d.staerken?.length > 0 && (
                     <div style={{ padding: 14, background: "#f0fdf4", borderRadius: 10, marginTop: 16, borderLeft: "3px solid #10b981" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#059669" }}>💪 Deine Stärken</div>
-                        {d.staerken.map((s, i) => (
+                        {d.staerken.map((s: any, i: number) => (
                             <div key={i} style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>
-                                <strong>{s.skill}:</strong> {s.begruendung}
+                                <strong>{s.dimension || s.skill || "?"}:</strong> {s.begruendung}
                             </div>
                         ))}
                     </div>
@@ -784,7 +809,7 @@ function DashboardCard({ d, isMobile }: { d: Dashboard; isMobile: boolean }) {
                     <div style={{ padding: 14, background: "#fff7ed", borderRadius: 10, marginTop: 12, borderLeft: "3px solid #f59e0b" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#d97706" }}>🎯 Größter Hebel</div>
                         <div style={{ fontSize: 12, color: "#374151", marginTop: 4, lineHeight: 1.5 }}>
-                            <strong>{d.hauptgap.skill}:</strong> {d.hauptgap.hauptluecke}
+                            <strong>{d.hauptgap.label || d.hauptgap.skill || d.hauptgap.dimension || "?"}:</strong> {d.hauptgap.beschreibung || d.hauptgap.hauptluecke}
                         </div>
                     </div>
                 )}
