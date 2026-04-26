@@ -751,7 +751,7 @@ function DashboardCard({ d, isMobile }: { d: any; isMobile: boolean }) {
                 }}>
                     {d.match_score}%
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>{d.match_label}</div>
+                <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 600, opacity: 0.9, lineHeight: 1.4, maxWidth: 360, margin: "0 auto" }}>{d.match_label}</div>
             </div>
 
             {/* Body */}
