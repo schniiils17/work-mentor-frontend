@@ -763,27 +763,29 @@ function DashboardCard({ d, isMobile }: { d: any; isMobile: boolean }) {
                     const score = normalizeScore(dim.user_score ?? dim.score ?? 50)
                     const color = bewertungColor(dim.bewertung)
 
+                    // Tendenz-Label statt exakte Prozente
+                    const tendenz = score >= 75 ? "Stark ausgeprägt" : score >= 55 ? "Ausgeglichen" : "Weniger ausgeprägt"
+                    const tendenzColor = score >= 75 ? "#059669" : score >= 55 ? "#2563eb" : "#d97706"
+
                     return (
                         <div key={i} style={{ marginBottom: 16 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                                 <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{label}</span>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                    {dim.bewertung && (
-                                        <span style={{ fontSize: 10, fontWeight: 600, color, background: `${color}15`, padding: "2px 6px", borderRadius: 6 }}>
-                                            {dim.bewertung}
-                                        </span>
-                                    )}
-                                    <span style={{ fontSize: 13, fontWeight: 700, color: score >= 70 ? "#059669" : "#d97706" }}>
-                                        {score}%
-                                    </span>
-                                </div>
+                                <span style={{
+                                    fontSize: 11, fontWeight: 600, color: tendenzColor,
+                                    background: `${tendenzColor}12`, padding: "3px 8px", borderRadius: 8,
+                                }}>
+                                    {dim.bewertung || tendenz}
+                                </span>
                             </div>
                             <div style={{ height: 6, borderRadius: 99, background: "#f3f4f6", overflow: "hidden" }}>
                                 <div style={{
                                     width: `${score}%`, height: "100%", borderRadius: 99,
                                     background: score >= 70
                                         ? "linear-gradient(90deg, #22d3ee, #10b981)"
-                                        : "linear-gradient(90deg, #fbbf24, #f59e0b)",
+                                        : score >= 50
+                                            ? "linear-gradient(90deg, #60a5fa, #3b82f6)"
+                                            : "linear-gradient(90deg, #fbbf24, #f59e0b)",
                                     transition: "width 0.5s",
                                 }} />
                             </div>
