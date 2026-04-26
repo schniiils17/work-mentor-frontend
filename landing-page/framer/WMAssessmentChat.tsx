@@ -266,7 +266,21 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             }]
         })
 
-        await sleep(800)
+        // Kurze Pause + "Erstelle Assessment" Message
+        await sleep(1000)
+        const prepTyping = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: prepTyping }])
+        await sleep(1200)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== prepTyping)
+            return [...filtered, {
+                kind: "agent",
+                text: "Gib mir einen kurzen Moment — ich stelle dein Assessment zusammen...",
+                id: nextId()
+            }]
+        })
+
+        await sleep(600)
         const typingId = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: typingId }])
 
@@ -289,15 +303,18 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             items = preloadedItems
         } else if (itemsResult.status === "fulfilled" && itemsResult.value?.items) {
             items = itemsResult.value.items
-            setAssessmentItems(items)
-            setCurrentItemIndex(0)
-            setAssessmentAnswers([])
-            assessmentItemsRef.current = items
-            assessmentAnswersRef.current = []
         } else {
             setError("Assessment konnte nicht geladen werden. Bitte lade die Seite neu.")
             return
         }
+
+        // IMMER Refs setzen — egal ob preloaded oder frisch geladen
+        setAssessmentItems(items)
+        setCurrentItemIndex(0)
+        setAssessmentAnswers([])
+        assessmentItemsRef.current = items
+        assessmentAnswersRef.current = []
+        currentItemIndexRef.current = 0
 
         if (diagResult.status === "fulfilled") setDiagnostikStrategy(diagResult.value)
 
