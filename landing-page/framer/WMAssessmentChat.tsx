@@ -253,47 +253,46 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             id: nextId()
         }])
 
-        // Kontext-Frage: Was ist dein Fokus in dem Job?
-        await sleep(1200)
-        const kontextTyping = nextId()
-        setBubbles(prev => [...prev, { kind: "typing", id: kontextTyping }])
-        await sleep(1200)
-        setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== kontextTyping)
-            return [...filtered, {
-                kind: "agent",
-                text: `Kurze Frage bevor wir loslegen — wie sieht dein typischer Tag als ${zieljob} aus?`,
-                id: nextId()
-            }]
-        })
+        // Smarter Kontext-Check: Claude entscheidet ob Rückfrage nötig
+        try {
+            const ctxRes = await callAgent("/api/jobs/context", { zieljob }, 1)
+            if (ctxRes?.needs_clarification && ctxRes.frage && ctxRes.optionen?.length) {
+                // Frage anzeigen
+                await sleep(800)
+                const ctxTyping = nextId()
+                setBubbles(prev => [...prev, { kind: "typing", id: ctxTyping }])
+                await sleep(1000)
+                setBubbles(prev => {
+                    const filtered = prev.filter(b => b.id !== ctxTyping)
+                    return [...filtered, { kind: "agent", text: ctxRes.frage, id: nextId() }]
+                })
 
-        // Kontext-Optionen als Klick-Buttons
-        await sleep(600)
-        const fokusId = nextId()
-        const fokusResolve = await new Promise<string>(resolve => {
-            setBubbles(prev => [...prev, {
-                kind: "kontext_frage",
-                id: fokusId,
-                optionen: [
-                    { id: "team", text: "🏢 Team führen, Strategie, interne Meetings" },
-                    { id: "kunden", text: "🤝 Selbst Kunden betreuen, Termine, Verhandlungen" },
-                    { id: "mix", text: "📊 Mix aus beidem" },
-                ],
-                onSelect: resolve,
-            }])
-        })
-        setJobFokus(fokusResolve)
+                // Optionen als Klick-Buttons
+                await sleep(500)
+                const fokusId = nextId()
+                const fokusAnswer = await new Promise<string>(resolve => {
+                    setBubbles(prev => [...prev, {
+                        kind: "kontext_frage",
+                        id: fokusId,
+                        optionen: ctxRes.optionen,
+                        onSelect: resolve,
+                    }])
+                })
 
-        // User-Antwort anzeigen
-        const fokusLabels: Record<string, string> = {
-            team: "🏢 Team führen, Strategie, interne Meetings",
-            kunden: "🤝 Selbst Kunden betreuen, Termine, Verhandlungen",
-            mix: "📊 Mix aus beidem",
+                // Gewählte Option finden + als User-Bubble anzeigen
+                const chosen = ctxRes.optionen.find((o: any) => o.id === fokusAnswer)
+                setJobFokus(chosen?.text || fokusAnswer)
+                setBubbles(prev => {
+                    const filtered = prev.filter(b => b.id !== fokusId)
+                    return [...filtered, { kind: "user", text: chosen?.text || fokusAnswer, id: nextId() }]
+                })
+            } else if (ctxRes?.kontext_wenn_klar) {
+                // Job ist klar genug — Kontext als Fokus speichern
+                setJobFokus(ctxRes.kontext_wenn_klar)
+            }
+        } catch (e) {
+            // Kein Kontext — nicht schlimm, weiter ohne
         }
-        setBubbles(prev => {
-            const filtered = prev.filter(b => b.id !== fokusId)
-            return [...filtered, { kind: "user", text: fokusLabels[fokusResolve] || fokusResolve, id: nextId() }]
-        })
 
         // Brücke: Warum die Fragen nichts mit Arbeit zu tun haben
         await sleep(800)
