@@ -128,6 +128,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
     const [assessmentAnswers, setAssessmentAnswers] = React.useState<{ item_id: string; antwort: string; item_text: string }[]>([])
     const assessmentAnswersRef = React.useRef<{ item_id: string; antwort: string; item_text: string }[]>([])
     const [diagnostikStrategy, setDiagnostikStrategy] = React.useState<Record<string, unknown> | null>(null)
+    const [jobFokus, setJobFokus] = React.useState("")
 
     const [jobData, setJobData] = React.useState({ zieljob: "" })
 
@@ -252,16 +253,58 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
             id: nextId()
         }])
 
-        // Brücke: Warum die Fragen nichts mit Arbeit zu tun haben
+        // Kontext-Frage: Was ist dein Fokus in dem Job?
         await sleep(1200)
+        const kontextTyping = nextId()
+        setBubbles(prev => [...prev, { kind: "typing", id: kontextTyping }])
+        await sleep(1200)
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== kontextTyping)
+            return [...filtered, {
+                kind: "agent",
+                text: `Kurze Frage bevor wir loslegen — wie sieht dein typischer Tag als ${zieljob} aus?`,
+                id: nextId()
+            }]
+        })
+
+        // Kontext-Optionen als Klick-Buttons
+        await sleep(600)
+        const fokusId = nextId()
+        const fokusResolve = await new Promise<string>(resolve => {
+            setBubbles(prev => [...prev, {
+                kind: "kontext_frage",
+                id: fokusId,
+                optionen: [
+                    { id: "team", text: "🏢 Team führen, Strategie, interne Meetings" },
+                    { id: "kunden", text: "🤝 Selbst Kunden betreuen, Termine, Verhandlungen" },
+                    { id: "mix", text: "📊 Mix aus beidem" },
+                ],
+                onSelect: resolve,
+            }])
+        })
+        setJobFokus(fokusResolve)
+
+        // User-Antwort anzeigen
+        const fokusLabels: Record<string, string> = {
+            team: "🏢 Team führen, Strategie, interne Meetings",
+            kunden: "🤝 Selbst Kunden betreuen, Termine, Verhandlungen",
+            mix: "📊 Mix aus beidem",
+        }
+        setBubbles(prev => {
+            const filtered = prev.filter(b => b.id !== fokusId)
+            return [...filtered, { kind: "user", text: fokusLabels[fokusResolve] || fokusResolve, id: nextId() }]
+        })
+
+        // Brücke: Warum die Fragen nichts mit Arbeit zu tun haben
+        await sleep(800)
         const bridgeTyping = nextId()
         setBubbles(prev => [...prev, { kind: "typing", id: bridgeTyping }])
-        await sleep(1500)
+        await sleep(1200)
         setBubbles(prev => {
             const filtered = prev.filter(b => b.id !== bridgeTyping)
             return [...filtered, {
                 kind: "agent",
-                text: "Jetzt will ich herausfinden wie DU tickst — dann kann ich vergleichen. Die nächsten Fragen haben absichtlich nichts mit Arbeit zu tun. Antworte einfach ehrlich.",
+                text: "Gut! Jetzt will ich herausfinden wie DU tickst — dann kann ich vergleichen. Die nächsten Fragen haben absichtlich nichts mit Arbeit zu tun. Antworte einfach ehrlich.",
                 id: nextId()
             }]
         })
@@ -384,6 +427,7 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                 diagnostik_strategy: diagnostikStrategy,
                 dimension_scores: {},
                 answers: assessmentAnswersRef.current,
+                job_fokus: jobFokus,
             }, 2)
 
             setBubbles(prev => prev.filter(b => b.id !== typingId))
@@ -577,6 +621,33 @@ export default function WMAssessmentChat({ maxWidth = 680 }: Props) {
                                     onAnswer={handleItemAnswer}
                                     totalItems={assessmentItemsRef.current.length}
                                 />
+                            )
+
+                        case "kontext_frage":
+                            return (
+                                <div key={bubble.id} style={{
+                                    maxWidth: "90%", alignSelf: "flex-start",
+                                    display: "flex", flexDirection: "column", gap: 8,
+                                }}>
+                                    {(bubble as any).optionen?.map((opt: { id: string; text: string }) => (
+                                        <button
+                                            key={opt.id}
+                                            onClick={() => (bubble as any).onSelect?.(opt.id)}
+                                            style={{
+                                                padding: isMobile ? "12px 14px" : "14px 18px",
+                                                background: "#fff", border: "1px solid #e5e7eb",
+                                                borderRadius: 14, fontSize: isMobile ? 14 : 15,
+                                                color: "#1f2937", cursor: "pointer", textAlign: "left",
+                                                transition: "all 0.15s",
+                                                lineHeight: 1.4,
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.background = "#eff6ff" }}
+                                            onMouseLeave={e => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.background = "#fff" }}
+                                        >
+                                            {opt.text}
+                                        </button>
+                                    ))}
+                                </div>
                             )
 
                         case "dashboard":
